@@ -12,7 +12,7 @@ def eob_to_adm(q_vec, p_vec, nu):
     
     """
 
-    q2      = np.einsum('ij,ij->j', q_vec, q_vec); # x, y
+    q2      = np.einsum('ij,ij->j', q_vec, q_vec);
     q       = np.sqrt(q2);
     q3      = q*q2;
     q4      = q*q3;
@@ -70,10 +70,26 @@ def qp_from_dyn(dyn, mass_ratio):
     x_eob = r_eob * np.cos(phi_eob)
     y_eob = r_eob * np.sin(phi_eob)
     
+    # covariant transformation laws
     # p_x = ∂φ/∂x p_φ + ∂r/∂x p_r
     # p_y = ∂φ/∂y p_φ + ∂r/∂y p_r
-    p_x_eob = - y_eob / r_eob * p_phi_eob + 2 * x_eob * p_r_eob
-    p_y_eob = x_eob / r_eob * p_phi_eob + 2 * y_eob * p_r_eob
+    p_x_eob = - y_eob / r_eob**2 * p_phi_eob + x_eob / r_eob * p_r_eob
+    p_y_eob = x_eob / r_eob**2 * p_phi_eob + y_eob / r_eob * p_r_eob
+    
+    # contravariant transformation laws
+    # p_x = ∂x/∂φ p_φ + ∂x/∂r p_r
+    # p_y = ∂y/∂φ p_φ + ∂y/∂r p_r
+    # p_x_eob = - r_eob * np.sin(phi_eob) * p_phi_eob + np.cos(phi_eob) * p_r_eob
+    # p_y_eob = r_eob * np.cos(phi_eob) * p_phi_eob + np.sin(phi_eob) * p_r_eob
+    
+    # psq_1 = p_x_eob ** 2 + p_y_eob ** 2
+    # psq_2 = p_r_eob ** 2 + p_phi_eob **2 / r_eob**2 
+    
+    # import matplotlib.pyplot as plt
+    # plt.plot(time, psq_1, label='mine')
+    # plt.plot(time, psq_2, label='computed')
+    # plt.legend()
+    # plt.show()
     
     q_eob = np.vstack((x_eob, y_eob))
     p_eob = np.vstack((p_x_eob, p_y_eob))
