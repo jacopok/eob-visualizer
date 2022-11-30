@@ -47,5 +47,6 @@ def get_dynamics():
 if __name__ == '__main__':
 
     dyn = get_dynamics()
-    plt.loglog(dyn['t'], dyn['r'])
-    plt.show()
+    # plt.loglog(dyn['t'], dyn['r'])
+    # plt.show()
+    print(dyn.keys())
