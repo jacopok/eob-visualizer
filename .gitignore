@@ -2,3 +2,4 @@ __pycache__/
 data/
 *.mp4
 *.png
+!nice_frame.png
