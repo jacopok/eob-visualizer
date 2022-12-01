@@ -1,6 +1,6 @@
 import numpy as np
 import EOBRun_module
-from maximum_likelihood_scenario import get_dynamics, M1, M2
+from maximum_likelihood_scenario import Event
 
 
 def eob_to_adm(q_vec, p_vec, nu):
@@ -96,14 +96,12 @@ def qp_from_dyn(dyn, mass_ratio):
     
     return q_eob, p_eob
 
-def get_time_and_coordinates():
+def get_time_and_coordinates(event: Event):
     
-    dyn = get_dynamics()
-    mass_ratio = M1 / M2
-    q_eob, p_eob = qp_from_dyn(dyn, mass_ratio)
-    q_adm, p_adm = eob_to_adm(q_eob, p_eob, mass_ratio / (1+ mass_ratio)**2)
-    r_1, r_2 = adm_q_to_single_body(q_adm, mass_ratio)
+    q_eob, p_eob = qp_from_dyn(event.dyn, event.mass_ratio)
+    q_adm, p_adm = eob_to_adm(q_eob, p_eob, event.red_mass_ratio)
+    r_1, r_2 = adm_q_to_single_body(q_adm, event.mass_ratio)
     
-    t = dyn['t']
+    t = event.dyn['t']
 
     return t, r_1, r_2
