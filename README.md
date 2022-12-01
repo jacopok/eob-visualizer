@@ -1,6 +1,8 @@
 Let's make a video of black holes orbiting and merging, 
 starting from their EOB description!
 
+![A frame from the video](nice_frame.png)
+
 ## Usage
 
 Everything is still extremely experimental, but basically:
@@ -10,9 +12,11 @@ information about the binary is contained in the `Event` class
 Once you define an event, you can plot it with the `plot_event` function
 within `plots.py`.
 
-![A frame from the video](nice_frame.png)
+This will generate a video of the EOB evolution brought into physical coordinates,
+also showing the corresponding gravitational waveform.
 
-This will generate a video of the EOB evolution brought into physical coordinates.
+The project is mostly targeted at visualizing the event GW190521,
+which was [recently reanalyzed showing that it was likely a dynamical capture](https://www.nature.com/articles/s41550-022-01813-w).
 
 ## Technical info / installation
 
