@@ -8,10 +8,8 @@ iota = 0.
 p_0_phi = 4.24
 E0_over_M = 1.014
 
-def get_dynamics():
-    # median values for constrained energy prior
-
-    t, hp, hc, hlm, dyn = EOBRunPy({
+# median values for constrained energy prior
+PAR = {
         'M'                  : M1+M2,
         'q'                  : M1/M2,
         'distance'           : Deff,
@@ -32,7 +30,7 @@ def get_dynamics():
         'output_dynamics'    : 0,                 #output of the dynamics
         'ode_tstep_opt'      : 1,                 #fixing uniform or adaptive. Default = 1 
         'srate_interp'       : 3000000.,          #srate at which to interpolate. Default = 4096.
-        'use_geometric_units': 0,                 #output quantities in geometric units. Default = 1
+        'use_geometric_units': 1,                 #output quantities in geometric units. Default = 1
         # 'r0':r,
         'interp_uniform_grid': 1,                 #interpolate mode by mode on a uniform grid. Default = 0 (no interpolation)
         'ecc'                : 0.18,              #Eccentricity. Default = 0.
@@ -41,8 +39,16 @@ def get_dynamics():
         'H_hyp'              : E0_over_M,                #H_hyp. Default = 0.
         'ode_tmax'           : 20e4,
         'output_hpc'         : 0,                 #output waveform. Default = 1.
-    })
+    }
+
+def get_dynamics():
+
+    t, hp, hc, hlm, dyn = EOBRunPy(PAR)
     return dyn
+
+def get_t_hp():
+    t, hp, hc, hlm, dyn = EOBRunPy(PAR)
+    return t, hp
 
 if __name__ == '__main__':
 
