@@ -1,6 +1,11 @@
 Let's make a video of black holes orbiting and merging, 
 starting from their EOB description!
 
+Videos made with this can be found at the following links:
+
+- [Dynamical capture for GW190521](https://www.youtube.com/watch?v=xRF-Gc0voik)
+- [Quasi-circular GW190521](https://www.youtube.com/watch?v=8FNCC3WeGyc)
+
 ![A frame from the video](nice_frame.png)
 
 ## Usage
