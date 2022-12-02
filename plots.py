@@ -10,7 +10,7 @@ from coordinate_conversion import get_time_and_coordinates
 from maximum_likelihood_scenario import constrained_prior, unconstrained_prior, Event
 # from whiten import whiten
 
-VID_FRAMES = 1000
+VID_FRAMES = 1500
 TIMES_PER_PLOT = 100
 TIME_AFTER_MERGER = 500
 CMAP = plt.get_cmap('inferno')
@@ -52,6 +52,7 @@ def make_vid(
         ffmpeg
         .input(str(frames_folder/'*.png'), pattern_type='glob', framerate=framerate)
         .output(str(this_folder / f'{vid_name}.mp4'))
+        .overwrite_output()
         .run()
     )
     
@@ -59,7 +60,7 @@ def make_vid(
         img.unlink()
     frames_folder.rmdir()
 
-def plot_frame(time, r_1, r_2, times, hp, event, get_limits, times_per_plot=TIMES_PER_PLOT):
+def plot_frame(time, r_1, r_2, times, hp, hp_highpass, event, get_limits, times_per_plot=TIMES_PER_PLOT):
     
     figsize_multip = 1.5
     fix, axs = plt.subplots(nrows=1, ncols=2, figsize=(16/figsize_multip, 9/figsize_multip), dpi=120*figsize_multip)
@@ -111,11 +112,13 @@ def plot_frame(time, r_1, r_2, times, hp, event, get_limits, times_per_plot=TIME
     axs[0].set_ylabel('y [M]')
     axs[0].set_title('Physical space orbits')
     
-    axs[1].plot(times[:time+TIMES_PER_PLOT], hp[:time+TIMES_PER_PLOT], c='black')
+    axs[1].plot(times[:time+TIMES_PER_PLOT], hp[:time+TIMES_PER_PLOT], c=CMAP(.5), label='Waveform')
+    axs[1].plot(times[:time+TIMES_PER_PLOT], hp_highpass[:time+TIMES_PER_PLOT], c=CMAP(0.), label='Highpass at 50Hz')
     axs[1].set_ylim(-1.5, 1.5)
     axs[1].set_xlabel('Detector frame time to merger [s]')
     axs[1].set_title('Plus polarization of the waveform')
     axs[1].set_aspect('equal')
+    axs[1].legend()
     x_left, x_right = axs[1].get_xlim()
     y_low, y_high = axs[1].get_ylim()
     axs[1].set_aspect(abs((x_right-x_left)/(y_low-y_high)))
@@ -127,11 +130,11 @@ def find_zoom_index(t, r_1, r_2):
         if np.linalg.norm(rad1-rad2) < 30:
             return time
 
-def plot_event(event: Event):
+def plot_event(event: Event, zoom_levels=(250, 30)):
     event.compute()
     t, r_1, r_2 = get_time_and_coordinates(event)
     dyn = event.dyn
-    t_full, hp = event.t, event.hp
+    t_full, hp, hp_highpass = event.t, event.hp, event.hp_highpass
     
     times = np.linspace(t[60], t[-1]+TIME_AFTER_MERGER, num=VID_FRAMES+TIMES_PER_PLOT)
     times_index = np.arange(VID_FRAMES)
@@ -141,28 +144,32 @@ def plot_event(event: Event):
     r_2_interp = interp1d(t[:-35], r_2[:,:-35], fill_value=0, bounds_error=False)(times)
     E_interp = interp1d(t, dyn['E'], fill_value=dyn['E'][-1], bounds_error=False)(times)
     hp_interp = interp1d(t_full, hp, kind='cubic', fill_value='extrapolate')(times)
+    hp_highpass_interp = interp1d(t_full, hp_highpass, kind='cubic', fill_value='extrapolate')(times)
     
-    M_in_seconds = 4.92549095e-06 * event.total_mass * (1+event.redshift)
+    
     
     def get_limits(time: int):
         N = VID_FRAMES+TIMES_PER_PLOT
+        zoom_index = find_zoom_index(times_index, r_1_interp, r_2_interp)-TIMES_PER_PLOT
         times = [
             0, 
-            .3*N, 
-            find_zoom_index(times_index, r_1_interp, r_2_interp)-TIMES_PER_PLOT, 
+            zoom_index*.7, 
+            zoom_index, 
             N
         ]
-        lims = [250, 250, 30, 30]
+        zoom_large, zoom_small = zoom_levels
+        lims = [zoom_large, zoom_large, zoom_small, zoom_small]
         return interp1d(times, lims, kind='linear')(time)
 
     
-    make_vid(
+    make_vid(  
         partial(
             plot_frame, 
             r_1=r_1_interp, 
             r_2=r_2_interp, 
-            times=-times_to_merger * M_in_seconds, 
+            times=-times_to_merger * event.M_in_seconds, 
             hp=hp_interp,
+            hp_highpass=hp_highpass_interp,
             event=event,
             get_limits=get_limits,
         ), 
@@ -170,10 +177,10 @@ def plot_event(event: Event):
         times_index,
         info={
             'energy': E_interp,
-            'time': times_to_merger * M_in_seconds
+            'time': times_to_merger * event.M_in_seconds
         },
     )
 
 if __name__ == '__main__':
-    plot_event(constrained_prior)
-    plot_event(unconstrained_prior)
+    # plot_event(constrained_prior)
+    plot_event(unconstrained_prior, zoom_levels=(250, 60))
