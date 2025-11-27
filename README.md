@@ -1,4 +1,4 @@
-Let's make a video of black holes orbiting and merging, 
+A video of black holes orbiting and merging, 
 starting from their EOB description!
 
 Videos made with this can be found at the following links:
@@ -10,8 +10,7 @@ Videos made with this can be found at the following links:
 
 ## Usage
 
-Everything is still extremely experimental, but basically:
-information about the binary is contained in the `Event` class 
+Information about the binary is contained in the `Event` class 
 (within `maximum_likelihood_scenario.py`).
 
 Once you define an event, you can plot it with the `plot_event` function
@@ -25,12 +24,11 @@ which was [recently reanalyzed showing that it was likely a dynamical capture](h
 
 ## Technical info / installation
 
-I'm running this with `python3.11`, and the necessary packages
-(which will be moved to a `pyproject.toml` soon) are:
+This was tested with `python3.11`, and the necessary packages
+are:
 `numpy astropy matplotlib scipy ffmpeg-python tqdm`
 
-Also, you need `TEOBResumS`. A version of it is packaged with `pip`, but 
-here we need a very specific version, so that won't do: instead,
+Also, you need `TEOBResumS`. To install the correct version, do:
 
 ```bash
 git clone https://bitbucket.org/eob_ihes/teobresums
