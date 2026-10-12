@@ -7,12 +7,12 @@ import ffmpeg
 from scipy.interpolate import interp1d
 
 from coordinate_conversion import get_time_and_coordinates
-from maximum_likelihood_scenario import constrained_prior, unconstrained_prior, Event
+from maximum_likelihood_scenario import constrained_prior, unconstrained_prior, Event, scattering, capture
 # from whiten import whiten
 
-VID_FRAMES = 1500
+VID_FRAMES = 800
 TIMES_PER_PLOT = 100
-TIME_AFTER_MERGER = 500
+TIME_AFTER_MERGER = 300
 CMAP = plt.get_cmap('inferno')
 
 def make_vid(
@@ -162,7 +162,7 @@ def plot_event(event: Event, zoom_levels=(250, 30)):
         return interp1d(times, lims, kind='linear')(time)
 
     
-    make_vid(  
+    make_vid(
         partial(
             plot_frame, 
             r_1=r_1_interp, 
@@ -184,3 +184,4 @@ def plot_event(event: Event, zoom_levels=(250, 30)):
 if __name__ == '__main__':
     # plot_event(constrained_prior)
     plot_event(unconstrained_prior, zoom_levels=(250, 60))
+    # plot_event(capture, zoom_levels=(250, 30))

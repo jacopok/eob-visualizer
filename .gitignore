@@ -3,3 +3,5 @@ data/
 *.mp4
 *.png
 !nice_frame.png
+*.npz
+*.pdf

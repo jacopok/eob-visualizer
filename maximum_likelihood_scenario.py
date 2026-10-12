@@ -115,6 +115,8 @@ class Event:
 # 
 
 constrained_prior = Event(mass_1=81., mass_2 = 52., p_0_phi = 4.24, E0_over_M = 1.014, redshift = 0.918, title='ConstrainedPrior')
+scattering = Event(mass_1=81., mass_2 = 52., p_0_phi = 4.5, E0_over_M = 1.01, redshift = 0.918, title='Scattering')
+capture = Event(mass_1=81., mass_2 = 52., p_0_phi = 4., E0_over_M = 1.03, redshift = 0.918, title='Capture')
 unconstrained_prior = Event(mass_1=77.92626388591152, mass_2 = 75.632506596936, p_0_phi = 4.240438656074215, E0_over_M = 1.0142366764445196, redshift = 0.65686802,title='UnconstrainedPrior')
 
 if __name__ == '__main__':
