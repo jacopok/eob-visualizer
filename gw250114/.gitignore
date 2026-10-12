@@ -1,0 +1,5 @@
+.venv/
+products/*.npz
+renders/
+__pycache__/
+products/scenes/
