@@ -1,0 +1,5 @@
+data/
+renders/
+products/*.npz
+products/scenes/
+__pycache__/

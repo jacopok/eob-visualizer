@@ -9,11 +9,19 @@ merging and ringing down, viewed from Earth.
 uv sync --python 3.10            # see "Environment" below for the pyseobnr rebuild
 .venv/bin/python validate_dynamics.py                  # consistency checks -> validation/
 .venv/bin/python ppd.py --ifo L1 --include-maxl        # whitened PPD (500 samples) -> products/
-.venv/bin/python export_scene.py --n-samples 40        # per-frame scene data -> products/scenes/, products/cloud40.json
+.venv/bin/python export_scene.py --n-samples 200       # per-frame scene data -> products/scenes/, products/cloud200.json
                                                        # (no argument: max-likelihood sample only -> products/sample<i>.json)
+.venv/bin/python camera.py --name cloud200             # camera path -> products/cloud200_camera.npz
 blender -b --factory-startup -P blender_scene.py -- \
-    --manifest products/cloud40.json --outdir renders/cloud40 --save-blend
-.venv/bin/python panel.py --name cloud40               # panel frames + final video renders/cloud40.mp4
+    --manifest products/cloud200.json --outdir renders/cloud200 --save-blend
+.venv/bin/python panel.py --name cloud200              # panel frames + final video renders/cloud200.mp4
+```
+
+`camera.py`, `blender_scene.py` and `panel.py` are event-agnostic (they read everything from
+the manifest and the scene files; `--products DIR` points them to another event's products),
+and are also used for GW190521 (`../gw190521/README.md`).
+
+```
 ```
 
 ## What is shown, and how it is computed
@@ -29,7 +37,17 @@ blender -b --factory-startup -P blender_scene.py -- \
   glows additively (independent of the drawing order). With q ≈ 1, which body is the
   heavier (orange) one varies across samples.
 - **Trails** fade exponentially with the orbital phase elapsed since the body was there
-  (e-folding 0.3 orbits).
+  (e-folding 0.3 orbits) and are cut off smoothly between 0.5 and 0.75 orbits; after the
+  attachment the phase keeps running at the attachment orbital frequency.
+- **Time window**: L1 time −0.29 to 0.25 s (merger at ≈0.217), i.e. from 0.5 s before merger,
+  played back 100 times slower; the panel scrolls with a fixed 0.19 s window.
+- **Camera** (`camera.py`): starts on the line of sight from Earth, far away (nearly
+  orthographic), framing the orbits and slowly zooming in as they shrink; then flies to a
+  close-up that follows one cluster of bodies (those of the majority θ_JN family near the
+  same body of a reference sample) from above its orbital plane, co-rotating with it; then
+  back to the line of sight for the merger and ringdown. Whenever the camera is off the line
+  of sight, a camera icon on it, joined to the centre of mass and labelled "to Earth", marks
+  the observer's direction, and the panel says how far off-axis the camera is.
 - **After the attachment time** the remnant is shown with pyseobnr's final mass and spin,
   the spin along J at attachment (as modelled by pyseobnr). No recoil.
 - **Ringdown**: the remnant's surface is `r = R_f [1 + Re(C(t) e^{-2i phi}) sin^2 theta]`
@@ -43,9 +61,9 @@ blender -b --factory-startup -P blender_scene.py -- \
   harmonics and the retrograde/mirror modes are neglected.
 - **Sizes**: spheres have the Kerr horizon areal radius `sqrt(A/4pi)`; lengths in source-frame km.
   EOB coordinates are gauge dependent, so positions/sizes near merger are indicative.
-- **Frame / camera**: sky frame (X west, Y north, Z towards Earth). The LAL I-frame is mapped
+- **Frame**: sky frame (X west, Y north, Z towards Earth). The LAL I-frame is mapped
   onto it so that the model's polarization basis goes onto bilby's `(m, n)` basis for the
-  sample's `psi`, and the direction of the observer onto +Z. Orthographic camera on +Z.
+  sample's `psi`, and the direction of the observer onto +Z.
 - **Grid**: plane through the centre of mass perpendicular to J at t → −∞, obtained by
   integrating pyseobnr's PN precession equations backwards from f_ref (it differs from
   J(f_ref) by ~0.1° for the max-L sample). For a cloud, the mean of the samples' J(−∞),

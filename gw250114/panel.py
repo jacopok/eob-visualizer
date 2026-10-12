@@ -15,19 +15,25 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from export_scene import REMNANT_DEFORMATION, SCENES
-from ppd import OUTDIR, TIME_RANGE
+from export_scene import REMNANT_DEFORMATION
+from ppd import OUTDIR
 
 RENDERS = Path(__file__).parent / "renders"
 WIDTH_PX, HEIGHT_PX, DPI = 1280, 320, 100
+WINDOW_BEFORE, WINDOW_AFTER = 13.0, 6.0  # scrolling window around the cursor [s of video]
 
 
-def render_panels(name):
-    manifest = json.load(open(OUTDIR / f"{name}.json"))
+def render_panels(name, products=OUTDIR):
+    manifest = json.load(open(products / f"{name}.json"))
     labels = manifest["labels"]
-    scene = np.load(SCENES / f"{labels[0]}.npz")
-    infos = [json.load(open(SCENES / f"{label}.json")) for label in labels]
-    ppd = np.load(OUTDIR / f"ppd_SEOBNRv5PHM_{scene['ifo']}.npz")
+    scenes = products / "scenes"
+    scene = np.load(scenes / f"{labels[0]}.npz")
+    infos = [json.load(open(scenes / f"{label}.json")) for label in labels]
+    event = manifest.get("event", "GW250114")
+    approximant = manifest.get("approximant", "SEOBNRv5PHM")
+    ppd = np.load(products / manifest.get("ppd_file", f"ppd_SEOBNRv5PHM_{scene['ifo']}.npz"))
+    before = WINDOW_BEFORE / float(scene["slowdown"])
+    after = WINDOW_AFTER / float(scene["slowdown"])
     shown = []
     for index in manifest["indices"]:
         where = np.flatnonzero(ppd["sample_indices"] == index)
@@ -37,24 +43,24 @@ def render_panels(name):
     n = len(shown)
 
     t_frames = scene["t_det_rel"]
-    window = (min(TIME_RANGE[0], t_frames[0]), max(TIME_RANGE[1], t_frames[-1]))
+    camera = np.load(products / f"{name}_camera.npz")
     t = ppd["times"]
-    sel = (t >= window[0] - 0.01) & (t <= window[1] + 0.01)
+    sel = (t >= t_frames[0] - before - 0.01) & (t <= t_frames[-1] + after + 0.01)
 
     plt.style.use("dark_background")
     fig = plt.figure(figsize=(WIDTH_PX / DPI, HEIGHT_PX / DPI), dpi=DPI)
     ax = fig.add_axes([0.06, 0.2, 0.58, 0.72])
     ax.plot(t[sel], ppd["data"][sel], c="0.45", lw=0.8, label=f"{scene['ifo']} data")
     ax.fill_between(t[sel], ppd["lower"][sel], ppd["upper"][sel], color="#56B4E9", alpha=0.7,
-                    lw=0, label="SEOBNRv5PHM 90% PPD")
+                    lw=0, label=f"{approximant} 90% PPD")
     if n == 1:  # (for a cloud, the coincident sample curves would hide the band)
         ax.plot(t[sel], shown[0][sel], c="w", lw=1.0, label="shown posterior sample")
     t_attach = [info["t_attach_det_rel"] for info in infos]
     ax.axvspan(min(t_attach), max(t_attach) + 1e-4, color="#E69F00", alpha=0.25, lw=0,
                label="attachment (merger) times")
     cursor = ax.axvline(t_frames[0], c="#E69F00", lw=1.5)
-    ax.set_xlim(*window)
-    ax.set_ylim(-15, 15)
+    peak = max(np.abs(ppd["upper"][sel]).max(), np.abs(ppd["lower"][sel]).max())
+    ax.set_ylim(-1.3 * max(peak, 4), 1.3 * max(peak, 4))
     ax.set_xlabel(f"{scene['ifo']} time $-$ {float(scene['reference_time']):.1f} s [s]", fontsize=9)
     ax.set_ylabel(r"Whitened strain [$\sigma$]", fontsize=9)
     ax.tick_params(labelsize=8)
@@ -63,7 +69,7 @@ def render_panels(name):
     if n == 1:
         s = infos[0]["sample"]
         header = (
-            "GW250114, one SEOBNRv5PHM posterior sample\n"
+            f"{event}, one {approximant} posterior sample\n"
             f"$m_1, m_2$ = {s['mass_1_source']:.1f}, {s['mass_2_source']:.1f} $M_\\odot$ (source)   "
             f"$\\chi_1, \\chi_2$ = {s['a_1']:.2f}, {s['a_2']:.2f}\n"
             f"$\\theta_{{JN}}$ = {np.degrees(s['theta_jn']):.0f}°,  "
@@ -73,7 +79,7 @@ def render_panels(name):
     else:
         n_away = manifest["n_J_inf_away_from_observer"]
         header = (
-            f"GW250114, {n} SEOBNRv5PHM posterior samples, each in its own\n"
+            f"{event}, {n} {approximant} posterior samples, each in its own\n"
             f"3D orientation. $\\theta_{{JN}}$ is bimodal: {n - n_away} with $J$ towards us,\n"
             f"{n_away} away (mirror images: same sky ellipse, opposite sense)\n"
         )
@@ -81,23 +87,36 @@ def render_panels(name):
                 "100 km spacing\n")
     text = (
         header
-        + "View from Earth along the line of sight (orthographic;\nnorth up, east left)\n"
         + grid
+        + manifest.get("panel_note", "")
         + "Spheres: horizon areal radius; arrows: spins, protruding\n"
-        "by $\\chi \\times 200$ km; trails fade over ~1/3 orbit\n"
+        "by $\\chi \\times 200$ km; trails fade by $e$ every 0.3 orbits\n"
         f"Remnant: $\\ell=m=2$ ringdown, 220 + 221 QNMs fitted to each\nsample's waveform "
         f"(shape amplitude illustrative, {REMNANT_DEFORMATION:.0%} at start)\n"
         f"Playback {int(scene['slowdown'])}× slower than real time"
     )
     fig.text(0.665, 0.95, text, fontsize=7, va="top", ha="left", color="0.85", linespacing=1.25)
+    status = fig.text(0.665, 0.08, "", fontsize=7.5, va="bottom", ha="left", color="#F5D98B")
 
-    outdir = RENDERS / name
+    outdir = products.parent / "renders" / name
     outdir.mkdir(parents=True, exist_ok=True)
     for f, tf in enumerate(t_frames):
         cursor.set_xdata([tf, tf])
+        ax.set_xlim(tf - before, tf + after)
+        status.set_text(
+            "Camera: on the line of sight from Earth\n(nearly orthographic; north up, east left)"
+            if camera["earth_marker"][f] < 0.01 else
+            f"Camera: {camera['off_axis_deg'][f]:.0f}° off the line of sight;\n"
+            "the camera icon marks the direction to Earth")
         fig.savefig(outdir / f"panel_{f:04d}.png", dpi=DPI)
     plt.close(fig)
     return outdir, int(scene["fps"])
+
+
+def compose_for(name, products, fps):
+    global RENDERS
+    RENDERS = products.parent / "renders"
+    return compose(RENDERS / name, fps, name)
 
 
 def compose(outdir, fps, label):
@@ -118,8 +137,9 @@ def compose(outdir, fps, label):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", required=True, help="manifest name, e.g. cloud40 or sample19987")
+    parser.add_argument("--products", type=Path, default=OUTDIR, help="event products directory")
     parser.add_argument("--no-video", action="store_true")
     args = parser.parse_args()
-    outdir, fps = render_panels(args.name)
+    outdir, fps = render_panels(args.name, args.products)
     if not args.no_video:
-        print(compose(outdir, fps, args.name))
+        print(compose_for(args.name, args.products, fps))

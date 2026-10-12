@@ -45,10 +45,10 @@ import eob_dynamics as ed
 from ppd import OUTDIR, REFERENCE_TIME
 
 IFO = "L1"
-TIME_WINDOW = (0.06, 0.25)  # detector time - REFERENCE_TIME [s]
+TIME_WINDOW = (-0.29, 0.25)  # detector time - REFERENCE_TIME [s]; merger at ~0.217
 FPS = 24
 SLOWDOWN = 100  # video seconds per second of signal
-TRAIL_SUBSAMPLING = 4  # trail points per frame
+TRAIL_POINTS_PER_ORBIT = 96
 REMNANT_DEFORMATION = 0.3  # fractional l = m = 2 deformation at t_attach (illustrative)
 SCENES = OUTDIR / "scenes"
 
@@ -103,10 +103,12 @@ def export(sample):
     # attachment it keeps running at the orbital frequency of the attachment
     now_phase = (frames["phi"] + np.maximum(t_geom - ta, 0) * at_attach["omega"][0]) / (2 * np.pi)
 
-    # trails, uniformly sampled in time up to the attachment (or the end of the window)
+    # trails, uniformly sampled in orbital phase up to the attachment (or the end of the window)
     t_end = min(ta, t_geom[-1])
-    n_trail = int((t_end - t_geom[0]) / (t_geom[1] - t_geom[0]) * TRAIL_SUBSAMPLING) + 2
-    trail = evaluate(np.linspace(t_geom[0], t_end, n_trail))
+    t_dense = np.linspace(t_geom[0], t_end, 20000)
+    phi_dense = ed.inertial_dynamics(model, t_dense)["phi"]
+    n_trail = int((phi_dense[-1] - phi_dense[0]) / (2 * np.pi) * TRAIL_POINTS_PER_ORBIT) + 2
+    trail = evaluate(np.interp(np.linspace(phi_dense[0], phi_dense[-1], n_trail), phi_dense, t_dense))
 
     # remnant: frame with z along its spin and x along the separation at attachment
     chi_f = abs(model.final_spin)
@@ -190,14 +192,21 @@ def axial_mean_angle(vectors_xy):
 
 
 def _export_index(args):
-    posterior, index = args
-    return export(ed.sample_as_dict(posterior, index))
+    export_fn, sample_as_dict, posterior, index = args
+    return export_fn(sample_as_dict(posterior, index))
 
 
-def export_set(indices, name, processes=8):
-    posterior = ed.load_posterior()
+def export_set(indices, name, processes=8, export_fn=None, load_posterior=ed.load_posterior,
+               sample_as_dict=ed.sample_as_dict, outdir=OUTDIR, extra=None):
+    """Export the samples `indices` and write the manifest `outdir/<name>.json`.
+    The defaults are GW250114's; another event passes its own export function
+    (returning the same arrays), posterior access and output directory."""
+    export_fn = export_fn or export
+    scenes = outdir / "scenes"
+    posterior = load_posterior()
     with Pool(processes) as pool:
-        results = pool.map(_export_index, [(posterior, i) for i in indices], chunksize=1)
+        results = pool.map(_export_index, [(export_fn, sample_as_dict, posterior, i) for i in indices],
+                           chunksize=1)
 
     J_xy = np.array([out["J_hat_inf"][:2] for out, _ in results])
     reference = axial_mean_angle(J_xy)
@@ -206,7 +215,7 @@ def export_set(indices, name, processes=8):
     if np.count_nonzero(J_xy @ axis < 0) > len(J_xy) / 2:
         axis = -axis
 
-    SCENES.mkdir(parents=True, exist_ok=True)
+    scenes.mkdir(parents=True, exist_ok=True)
     labels = []
     for index, (out, info) in zip(indices, results):
         info["psi_shown"] = info["sample"]["psi"]
@@ -214,8 +223,8 @@ def export_set(indices, name, processes=8):
             rotate_by_pi_about_line_of_sight(out, info)
         label = f"sample{index}"
         info["label"] = label
-        np.savez(SCENES / f"{label}.npz", label=label, **out)
-        with open(SCENES / f"{label}.json", "w") as f:
+        np.savez(scenes / f"{label}.npz", label=label, **out)
+        with open(scenes / f"{label}.json", "w") as f:
             json.dump(info, f, indent=2)
         labels.append(label)
 
@@ -239,7 +248,9 @@ def export_set(indices, name, processes=8):
         "t_attach_det_rel_range": [float(t_attach.min()), float(t_attach.max())],
         "ringdown_fit_residual_max": float(max(info["ringdown_fit_residual"] for _, info in results)),
     }
-    with open(OUTDIR / f"{name}.json", "w") as f:
+    manifest.update(extra or {"event": "GW250114", "approximant": "SEOBNRv5PHM",
+                              "ppd_file": f"ppd_SEOBNRv5PHM_{IFO}.npz"})
+    with open(outdir / f"{name}.json", "w") as f:
         json.dump(manifest, f, indent=2)
     print(json.dumps(manifest | {"labels": f"{len(labels)} samples", "indices": "..."}, indent=2))
     return manifest
