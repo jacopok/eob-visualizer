@@ -1,0 +1,246 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+
+\title{Visualising GW250114 with SEOBNRv5PHM:\\how the posterior-cloud video is made}
+\author{}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe the pipeline that turns 200 posterior samples of the SEOBNRv5PHM
+parameter-estimation run on GW250114 into a 3D animation of the binary's inspiral, merger
+and ringdown, as seen from Earth, synchronised with the whitened LIGO Livingston strain.
+Each sample's orbit, spins and remnant are computed from the model itself, called with the
+same settings as the likelihood. We list what is physically faithful and what is
+illustrative.
+\end{abstract}
+
+\section{Overview}
+
+The video (\code{renders/cloud200.mp4}, $1920\times1080$, 30\,fps, 66\,s) has two parts:
+a 3D view ($1920\times810$) rendered in Blender, and a panel ($1920\times270$) showing the
+whitened L1 strain with a time cursor. The signal is played back 100 times slower than
+real time, over the detector-time window $[-0.29, 0.37]$\,s around
+$t_0 = 1420878141.0$ (merger at $\approx t_0 + 0.217$\,s), giving 1981 frames.
+
+The pipeline, run from \code{gw250114/}, is:
+\begin{enumerate}
+  \item \code{validate\_dynamics.py}: consistency checks on the dynamics (Sec.~\ref{sec:checks});
+  \item \code{ppd.py}: whitened posterior-predictive band for the panel (Sec.~\ref{sec:panel});
+  \item \code{export\_scene.py --n-samples 200}: per-frame scene data for each sample
+        (Secs.~\ref{sec:dynamics}--\ref{sec:sky});
+  \item \code{camera.py}: the camera path (Sec.~\ref{sec:camera});
+  \item \code{blender\_scene.py}: builds the scene and renders the 3D frames (Sec.~\ref{sec:render});
+  \item \code{panel.py}: renders the panel frames and stacks everything into the video.
+\end{enumerate}
+\code{camera.py}, \code{blender\_scene.py} and \code{panel.py} don't depend on the event: they
+read everything from the products directory. The same code also renders GW190521.
+
+\section{Samples}
+
+The cloud is the first $N=200$ of the 500 random draws from the
+\code{bilby-SEOBNRv5PHM-reweighted} posterior that are also used for the
+posterior-predictive band. The maximum-likelihood sample is added and highlighted.
+Each sample keeps its own masses, spins, distance, sky position and 3D orientation.
+
+\section{Dynamics}\label{sec:dynamics}
+
+\paragraph{Model call.} SEOBNRv5PHM (pyseobnr 0.3.5, the version used in the PE run) is
+called with exactly the arguments bilby's \code{gwsignal\_binary\_black\_hole} used in the
+likelihood: $f_\mathrm{ref}=20$\,Hz, $f_\mathrm{min}=10$\,Hz (lowered by the conditioning),
+\code{lmax\_nyquist}$=1$.
+
+\paragraph{Orbit.} The EOB relative orbit in the inertial frame is
+\begin{equation}
+  \vect{n}(t) = R(t)\,(\cos\phi, \sin\phi, 0)^T ,
+\end{equation}
+where $\phi$ is the EOB orbital phase and $R(t)$ is the co-precessing$\to$inertial rotation
+that pyseobnr uses to twist up the modes. The bodies sit at
+\begin{equation}
+  \vect{x}_1 = \frac{m_2}{M}\, r\,\vect{n}, \qquad
+  \vect{x}_2 = -\frac{m_1}{M}\, r\,\vect{n},
+\end{equation}
+with $r$ the EOB separation. Lengths are converted to source-frame km with
+$G M/c^2/(1+z)$. The spins are pyseobnr's PN-evolved spin vectors, as functions of the EOB
+orbital frequency. EOB coordinates depend on the gauge, so positions near merger are
+indicative only.
+
+\paragraph{Sizes.} Each black hole is drawn as a sphere with the areal radius of its
+Kerr horizon, $\sqrt{A/4\pi} = \sqrt{2 m r_+}$, with $r_+ = m(1+\sqrt{1-\chi^2})$.
+
+\paragraph{Timeline.} Frames are evenly spaced in L1 detector time. The state shown at
+$t_\mathrm{det}$ is the one at waveform time
+$t_\mathrm{det} - t_\mathrm{geocent} - \Delta t_\mathrm{L1}$, i.e.\ the state that emitted
+the signal arriving at L1 at $t_\mathrm{det}$. All samples share this timeline, so each one
+merges at its own detector time. Across the cloud, these times span
+$[0.21636, 0.21678]$\,s.
+
+\section{Merger and ringdown}\label{sec:ringdown}
+
+\paragraph{Remnant.} From the attachment time $t_\mathrm{attach}$ on, the two bodies are
+replaced by the remnant, with pyseobnr's final mass and spin $\chi_f$. The spin points
+along $\hat{\vect{J}}$ at attachment, as pyseobnr models it.
+
+\paragraph{Ringing.} In a frame with $z$ along the remnant spin and $\varphi$ measured
+from the separation $\vect{n}(t_\mathrm{attach})$, the horizon surface is
+\begin{equation}
+  r(\theta,\varphi,t) = R_f\left[1 + \operatorname{Re}\!\left(C(t)\,e^{-2i\varphi}\right)
+  \sin^2\theta\right], \qquad
+  C(t) = 0.3\,\overline{\left(\frac{h(t)}{h(t_\mathrm{attach})}\right)} .
+\end{equation}
+Here $h$ is a 220\,+\,221 Kerr quasinormal-mode fit to the sample's own $(2,2)$ mode in
+the final-$J$ frame, starting at $t_\mathrm{attach}$, with frequencies from the \code{qnm}
+package for that sample's $(M_f,\chi_f)$. The $\ell=m=2$ bar therefore starts along the
+line joining the two black holes, rotates with the pattern speed $\omega_R/2$, and decays
+with the two damping times, using the fitted $221/220$ amplitude ratio ($\approx1.25$) and
+relative phase. In Blender this is implemented as two shape keys of the unit sphere,
+$x^2-y^2$ and $2xy$, weighted by $\operatorname{Re}C$ and $\operatorname{Im}C$.
+The 30\% overall amplitude is \emph{illustrative}. The following are neglected:
+spheroidal vs.\ spherical harmonics, retrograde and mirror modes, and any difference
+between the horizon's and the waveform's mode content.
+
+\paragraph{Recoil.} The kick velocity $\vect{v}_k$ comes from the NRSur7dq4Remnant fit
+(\code{surfinBH}). Its inputs are the spins and orbit at $-100\,M$ from the peak (which is
+$t_\mathrm{attach}$ in v5), expressed in the fit's coorbital frame. From attachment on, the
+remnant moves as $\vect{x}_f(t) = \vect{v}_k\,(t - t_\mathrm{attach})$. Over the
+ringdown window this is a displacement of $\sim\!30$\,km (median) to $\sim\!200$\,km (largest).
+
+\section{Sky frame and orientation}\label{sec:sky}
+
+\paragraph{Frame.} The sky frame has $X$ pointing west, $Y$ north and $Z$ towards Earth. The LAL
+source frame is rotated so that the model's polarisation basis maps onto bilby's $(m,n)$
+basis for the sample's $\psi$, and the direction to the observer maps onto $+Z$.
+
+\paragraph{$\psi$ vs.\ $\psi+\pi$.} These give identical detector responses: rotating
+the whole configuration by $\pi$ about the line of sight is equally allowed. bilby samples
+$\psi\in[0,\pi)$. For each sample we show the representative whose sky-projected
+$\vect{J}(t\to-\infty)$ lies on the same side as the axial mean of the set. For this posterior
+no sample needs to be rotated.
+
+\paragraph{Grid.} The reference grid is the plane through the centre of mass perpendicular
+to $\vect{J}(t\to-\infty)$. That direction is obtained by integrating pyseobnr's PN
+precession equations backwards from $f_\mathrm{ref}$ (it differs from $\vect{J}(f_\mathrm{ref})$
+by $\sim0.1^\circ$ for the max-L sample). For the cloud, we average the samples'
+$\vect{J}(-\infty)$ after reflecting through the sky plane those that point away from
+us. $\theta_{JN}$ is bimodal ($\approx45^\circ$ or $\approx135^\circ$), and the two families
+are mirror images through the sky plane. Along the line of sight they look the same
+(same projected ellipses, opposite senses of rotation). The grid only adds light, so it
+never hides bodies on its far side.
+
+\section{Camera}\label{sec:camera}
+
+\code{camera.py} blends three shots with smoothstep weights. The target point is
+interpolated linearly, the viewing direction by slerp, and the view width and camera
+distance logarithmically:
+\begin{enumerate}
+  \item \emph{From Earth}: on the line of sight, 40\,000\,km away (nearly orthographic),
+        framing the orbits with a 10\% margin and zooming in slowly as they shrink;
+  \item \emph{Close-up} (in over 39.7--33.7\,s, out over 15.7--8.7\,s before merger in
+        video time): follows a cluster of bodies from above its orbital plane, co-rotating
+        with it. The cluster is formed by the bodies of the majority $\theta_{JN}$ family
+        that are close to the same body of a reference sample;
+  \item \emph{Back to Earth}: on the line of sight for the merger and ringdown, framing the
+        horizons plus the spin arrows.
+\end{enumerate}
+When the camera is off the line of sight, a movie-camera icon on that line, joined to the
+centre of mass and labelled ``to Earth'', marks the observer's direction. The panel then
+shows the off-axis angle.
+
+\section{Rendering}\label{sec:render}
+
+\code{blender\_scene.py} (Blender 5.2, EEVEE, 16 samples per pixel, 1 Blender unit
+$=100$\,km) builds one set of objects per sample, keyframed on every frame with constant
+interpolation, and uses the \code{solid\_highlight} style:
+
+\begin{itemize}
+  \item \textbf{Horizons}: opaque black spheres with coloured Fresnel rims. The heavier
+        body is orange and the lighter one blue, and the remnant is green. Since
+        $q\approx1$, which body is the heavier one varies across samples.
+  \item \textbf{Spin arrows}: along $\vect{\chi}_i$, starting from the centre and
+        protruding from the horizon by $400\,\mathrm{km}\times|\chi|$. Each remnant
+        arrow has a small flared collar where it leaves the horizon, at the spin pole.
+        The $\sin^2\theta$ deformation vanishes there, so the collar stays on the surface
+        while the remnant rings. Without the collar, an arrow leaving the face of the
+        horizon that faces the camera seems to float in front of it. This is the usual
+        case for the remnant, whose spin is only $\sim40^\circ$ from the line of sight.
+  \item \textbf{Trails}: thin tubes along each body's past orbit, sampled at 96 points
+        per orbit. They are alpha-blended so that they saturate to the body colour,
+        independently of the drawing order. Their brightness falls off exponentially
+        with the orbital phase elapsed since the body passed there (e-folding 0.3
+        orbits), with a smooth cutoff between 0.4 and 0.6 orbits. After the attachment,
+        the phase keeps running at the attachment orbital frequency, so the trails fade
+        out.
+  \item \textbf{Max-likelihood sample}: lighter colours, thicker arrows and longer opaque
+        trails.
+\end{itemize}
+
+\section{Strain panel}\label{sec:panel}
+
+\code{ppd.py} reproduces the whitened-strain reconstruction of the GW250114 paper
+(\code{waveform\_reconstruction.py}): same data dump, PSDs, whitening and
+$\sqrt{\beta}$ factor ($\alpha=1/4$, $\beta = 1-5\alpha/8$). The waveforms come from 500
+SEOBNRv5PHM samples, generated with the PE settings and per-sample calibration, and the
+panel shows their 90\% band. The NRSur7dq4 run's data dump is used because its PSDs are
+identical to the SEOBNRv5PHM run's. \code{panel.py} draws the L1 data, the band, the
+attachment times and a cursor, in a window that scrolls 13\,s behind and 6\,s ahead of the
+cursor (in video time). It then stacks the panel under the 3D frames with ffmpeg.
+
+\section{Checks}\label{sec:checks}
+
+\code{validate\_dynamics.py} checks the following:
+\begin{enumerate}
+  \item $R(t)\hat z$ coincides with $\hat{\vect{L}}_N(t)$ to $0.002^\circ$. At
+        $t_\mathrm{ref}$, $\vect{n}=\hat x$ and $\hat{\vect{L}}_N = \hat z$ (LAL convention).
+  \item $h_+, h_\times$ computed from the point-mass orbit with the Cartesian multipole
+        formula (mass quadrupole, octupole, current quadrupole) match the model's to
+        $\approx20\%$. The residual comes from PN corrections that the leading-order
+        formula doesn't include. Other polarisation bases give $>130\%$, and swapping the
+        bodies is disfavoured in an unequal-mass ($q=3$) test.
+  \item bilby's frequency-domain L1/H1 response matches the time-domain polarisations
+        placed at $t_\mathrm{geocent}+\Delta t$ with zero lag.
+  \item With NRSur7dq4, \code{ppd.py} reproduces the paper's reconstruction.
+  \item Ringdown: the 220\,+\,221 fit of $h_{22}$ in the final-$J$ frame has a relative
+        residual of 0.18--0.21 (0.54 with 220 alone). Almost all of it is within the first
+        few $M$, where the model's amplitude has a flat peak that no QNM sum reproduces.
+        $|A_{221}/A_{220}|\approx1.25$ is stable against the fit length. Running pyseobnr
+        with mode output leaves the dynamics bit-identical.
+\end{enumerate}
+
+\section{Caveats}
+
+\begin{itemize}
+  \item Positions near merger are in EOB coordinates, which depend on the gauge.
+  \item The ringdown deformation amplitude is illustrative. Only its time dependence
+        (rotation, decay, 221/220 content) comes from the model.
+  \item The two bodies switch to the remnant instantaneously at $t_\mathrm{attach}$; no
+        common horizon is modelled.
+  \item The 3D view uses perspective projection. Only the ``from Earth'' shots, being
+        nearly orthographic, correspond to what a distant observer would ``see''.
+\end{itemize}
+
+\section*{Reproducing}
+
+\begin{verbatim}
+uv sync --python 3.10
+.venv/bin/python validate_dynamics.py
+.venv/bin/python ppd.py --ifo L1 --include-maxl
+.venv/bin/python export_scene.py --n-samples 200
+.venv/bin/python camera.py --name cloud200
+blender -b --factory-startup -P blender_scene.py -- \
+    --manifest products/cloud200.json --outdir renders/cloud200 \
+    --style solid_highlight
+.venv/bin/python panel.py --name cloud200
+\end{verbatim}
+\code{blender\_scene.py --frames a:b} (or a comma-separated list) re-renders a subset of the
+frames. For example, the ringdown frames were re-rendered with \code{--frames 1520:} after
+adding the collars to the remnant spin arrows.
+
+\end{document}

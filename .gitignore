@@ -5,3 +5,16 @@ data/
 !nice_frame.png
 *.npz
 *.pdf
+*.h5
+*.log
+*.blend
+*.blend1
+GW250114_posteriors/
+*/products/
+*/renders/
+*/data/
+writeup/*.aux
+*.aux
+*.fls
+*.fdb_latexmk
+*.out
