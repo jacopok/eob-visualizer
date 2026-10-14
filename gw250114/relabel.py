@@ -10,8 +10,7 @@ normalized) in the sky frame, on the common detector-time axis of the renders
 (`eobviz/export.py`). Relabeling flips u -> -u. With
     C_ij = sum_t w(t) u_i(t) . u_j(t),
 the signs s_i maximize sum_ij s_i s_j C_ij = sum_t w |sum_i s_i u_i|^2
-(Z2 synchronization): spectral initialization (leading eigenvector of C),
-then Lloyd iterations s_i = sign(sum_t w u_i . mu), mu = sum_j s_j u_j.
+(Z2 synchronization, `eobviz.labels.synchronize_signs`).
 w(t) is uniform within ANALYSIS_WINDOW and zero after each sample's attachment.
 
 psi -> psi + pi is an exact symmetry of the detector response which maps
@@ -35,6 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eobviz.events import get_event  # noqa: E402
 from eobviz.export import axial_mean_angle  # noqa: E402
+from eobviz.labels import synchronize_signs  # noqa: E402
 from eobviz.models.seobnrv5 import SEOBNRv5PHM  # noqa: E402
 
 EVENT = get_event("GW250114")
@@ -116,27 +116,6 @@ def fix_psi(u, J):
     return u, flip
 
 
-def synchronize_signs(u, weight, max_iter=100):
-    """Signs s maximizing sum_ij s_i s_j C_ij, and the per-sample agreement
-    score_i = sum_t w s_i u_i . mu / sqrt(sum_t w |u_i|^2 sum_t w |mu|^2) in [-1, 1]."""
-    from scipy.sparse.linalg import svds
-
-    v = np.nan_to_num(u) * np.sqrt(weight).astype(u.dtype)[None, :, None]
-    V = v.reshape(len(v), -1).astype(np.float32)
-    # leading eigenvector of C = V V^T, without forming C
-    left, _, _ = svds(V, k=1)
-    s = np.where(left[:, 0] >= 0, 1, -1)
-    for _ in range(max_iter):
-        mu = s @ V
-        new = np.where(V @ mu >= 0, 1, -1)
-        if np.array_equal(new, s):
-            break
-        s = new
-    mu = s @ V
-    score = s * (V @ mu) / np.sqrt(np.sum(V**2, axis=1) * (mu @ mu))
-    return s, score
-
-
 def relabeled(posterior, indices, s):
     """Posterior samples at `indices`, with the BHs swapped where s = -1."""
     out = posterior[indices].copy()
@@ -198,10 +177,7 @@ def analyze():
     t = time_grid()
     weight = ((t >= ANALYSIS_WINDOW[0]) & (t <= ANALYSIS_WINDOW[1])).astype(float)
 
-    s, score = synchronize_signs(u, weight)
-    # the overall sign is free: keep most samples' original labels
-    if np.count_nonzero(s < 0) > len(s) / 2:
-        s, score = -s, score
+    s, score = synchronize_signs(u, weight)  # most samples keep their original labels
     swapped = s < 0
     print(f"{len(s)} samples, {np.count_nonzero(swapped)} relabeled "
           f"({np.mean(swapped):.1%}); psi flipped for {np.count_nonzero(psi_flip)}")

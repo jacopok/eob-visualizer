@@ -18,6 +18,17 @@ python -m eobviz panel GW250114 --name cloud200        # panel frames + final vi
 python -m eobviz scene GW250114 --name cloud200        # explore the scene in Blender, back and forth in time (--draft: fast, plain look)
 ```
 
+The explanatory video (`eobviz/story.py`): 400 samples, pausing to explain and fold the
+ψ and θ_JN copies and to relabel the BHs by orbit clustering. A quick low-frame-rate draft:
+
+```
+python -m eobviz export GW250114 --n-samples 400
+python -m eobviz camera GW250114 --name cloud400 --story degeneracies --fps 10
+python -m eobviz render GW250114 --name cloud400 --draft   # -> renders/cloud400_draft/
+python -m eobviz panel GW250114 --name cloud400 --draft    # -> renders/cloud400_draft.mp4
+```
+(full quality: `camera` without `--fps`, `render` and `panel` without `--draft`).
+
 The code is in `../eobviz` (see the repository README); `python -m eobviz` switches to this
 directory's `.venv` by itself. The SEOBNRv5PHM call is in `eobviz/models/seobnrv5.py`, the
 event's settings and data in `eobviz/events/gw250114.py`. The same pipeline serves GW190521
@@ -50,6 +61,17 @@ event's settings and data in `eobviz/events/gw250114.py`. The same pipeline serv
   back to the line of sight for the merger and ringdown. Whenever the camera is off the line
   of sight, a camera icon on it, joined to the centre of mass and labelled "to Earth", marks
   the observer's direction, and the panel says how far off-axis the camera is.
+- **Storyboard** (`--story degeneracies`, `eobviz/story.py`): early in the inspiral the
+  evolution slows to a stop and the camera turns to a side view in which the four
+  sky-orientation copies (ψ or ψ + π, θ_JN or π − θ_JN) are apart. Captions (LaTeX, written
+  in manim-style) give the reason for each copy; the two sides of each fold move apart to
+  the left and right of the view, labelled, then the discarded side fades out and the kept
+  one comes back: the cloud is restricted to 0 < ψ < π and 0 < θ_JN < π/2. Last, the BHs of
+  the canonical samples are relabelled by orbit clustering (`eobviz/labels.py`, as in
+  `relabel.py` but within the canonical domain): the samples labelled against the majority
+  by m_1 ≥ m_2 move to the right, swap colours and come back. The camera goes back to the
+  line of sight, the evolution resumes with the canonical set only, and the close-up follows
+  one of its clusters; the other copies fade back in after the merger.
 - **After the attachment time** the remnant is shown with pyseobnr's final mass and spin,
   the spin along J at attachment (as modelled by pyseobnr). It recoils with the
   NRSur7dq4Remnant kick (spins and orbit at -100 M from the peak) from the attachment on.
@@ -76,9 +98,10 @@ event's settings and data in `eobviz/events/gw250114.py`. The same pipeline serv
   ellipses, opposite senses of rotation). The grid only adds light, so it never hides
   bodies on "the wrong side" of it.
 - **ψ vs ψ + π**: the two give identical detector responses, i.e. the whole configuration
-  rotated by 180° about the line of sight is equally allowed. bilby samples ψ ∈ [0, π);
-  each sample is shown with the representative whose sky-projected J(−∞) is on the side of
-  the axial mean of the set (with this posterior no sample needs to be rotated).
+  rotated by 180° about the line of sight is equally allowed. bilby samples ψ ∈ [0, π),
+  an arbitrary cut; each sample is shown at ψ or ψ + π with probability ½ (seeded by its
+  posterior index), so the cloud shows the full uncertainty. The two halves' J(−∞) cancel
+  on the sky, so the grid ends up nearly face-on.
 - **Time**: frames are uniform in L1 detector time; the binary state shown at `t_det`
   is the one at waveform time `t_det − geocent_time − Δt_L1`.
 - **Panel**: whitened L1 strain as in `waveform_reconstruction.py` of the GW250114 paper

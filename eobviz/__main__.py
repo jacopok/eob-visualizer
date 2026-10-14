@@ -2,9 +2,9 @@
 
     python -m eobviz ppd EVENT [--ifo H1] [--n-samples 500] [--approximant NRSur7dq4]
     python -m eobviz export EVENT [--n-samples 200 | --index I]    # default: max likelihood
-    python -m eobviz camera EVENT --name cloud200 [--shot orbit]
+    python -m eobviz camera EVENT --name cloud200 [--shot orbit] [--story degeneracies] [--fps 10]
     python -m eobviz render EVENT --name cloud200 [blender_scene.py options, e.g. --style solid_highlight]
-    python -m eobviz panel EVENT --name cloud200 [--no-video]
+    python -m eobviz panel EVENT --name cloud200 [--no-video] [--draft]
     python -m eobviz scene EVENT --name cloud200 [blender_scene.py options]   # interactive Blender
         (fast, plain look for iterating: --draft [--max-samples 50], with scene or render)
     python -m eobviz events
@@ -54,6 +54,9 @@ def parse_args(argv):
     c = command("camera", "camera path", needs_name=True)
     c.add_argument("--shot", default="close-up", choices=["close-up", "orbit"],
                    help="middle shot: co-rotating close-up of a cluster, or a slow orbit")
+    c.add_argument("--story", default=None, choices=["degeneracies"],
+                   help="storyboard (story.py): pause and explain the sky-orientation copies and the labels")
+    c.add_argument("--fps", type=float, default=None, help="video frame rate (default: the data's)")
 
     c = command("render", "render the 3D frames with Blender (background)", needs_name=True)
     c.add_argument("--blender", default="blender")
@@ -62,6 +65,7 @@ def parse_args(argv):
 
     c = command("panel", "panel frames and the final video", needs_name=True)
     c.add_argument("--no-video", action="store_true")
+    c.add_argument("--draft", action="store_true", help="with the frames of `render --draft`")
     # unknown options of render/scene go to blender_scene.py
     return p.parse_known_args(argv)
 
@@ -120,13 +124,14 @@ def main(argv=None):
     elif args.command == "camera":
         from .camera import camera_path
 
-        camera_path(args.name, event.products, args.shot)
+        camera_path(args.name, event.products, args.shot, args.story, args.fps)
     elif args.command == "panel":
-        from .panel import compose, render_panels
+        from .panel import compose, load_captions, render_panels
 
-        frames, fps = render_panels(event, args.name)
+        frames, fps = render_panels(event, args.name, args.draft)
         if not args.no_video:
-            print(compose(frames, fps, event.renders / f"{args.name}.mp4"))
+            video = event.renders / f"{args.name}{'_draft' if args.draft else ''}.mp4"
+            print(compose(frames, fps, video, load_captions(event.products, args.name)))
     return 0
 
 

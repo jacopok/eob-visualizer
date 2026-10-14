@@ -11,6 +11,13 @@ Shots, in detector time:
    sense of most orbits), framing the whole set, and climbs back;
 3. back to the line of sight, framing the merger and the ringdown.
 
+With a storyboard (`--story degeneracies`, see `story.py`) the video frames are no longer
+the data frames: the evolution pauses early on while the camera turns to a side view
+(blended over the shots above, in video time), the close-up follows a cluster of the
+canonical set and the grid is perpendicular to that set's mean J(t -> -inf). The output
+then also holds the map to the data frames, the opacities of the sets of samples and the
+captions. `--fps` sets the frame rate of the video (default: that of the data).
+
 A shot is a target point, a viewing direction (target -> camera), the width of the view
 at the target and the distance of the camera. Shots are blended with smoothstep weights:
 the target linearly, the direction by slerp, width and distance logarithmically.
@@ -18,7 +25,7 @@ the target linearly, the direction by slerp, width and distance logarithmically.
 The direction to Earth is +Z; `earth_marker` (0..1) says how far the camera is from it,
 used to show a marker on the line of sight when the camera is not on it.
 
-Usage: python -m eobviz camera EVENT --name cloud200 [--shot orbit]
+Usage: python -m eobviz camera EVENT --name cloud200 [--shot orbit] [--story degeneracies] [--fps 10]
 """
 
 import json
@@ -87,10 +94,12 @@ def view_width_for_orbit(scenes):
     return 2 * 1.1 * R * ASPECT
 
 
-def cluster_track(scenes, infos, fps=24):
-    """Centroid of one cluster of bodies and the mean orbital-plane normal of its family."""
+def cluster_track(scenes, infos, fps=24, family=None):
+    """Centroid of one cluster of bodies and the mean orbital-plane normal of its family
+    (default: the majority theta_JN family)."""
     J_z = np.array([d["J_hat_inf"][2] for d in scenes])
-    family = J_z > 0 if np.count_nonzero(J_z > 0) >= len(J_z) / 2 else J_z < 0
+    if family is None:
+        family = J_z > 0 if np.count_nonzero(J_z > 0) >= len(J_z) / 2 else J_z < 0
     members = np.flatnonzero(family)
     ref = members[np.argmax([infos[i]["sample"]["log_likelihood"] for i in members])]
     x_ref = scenes[ref]["x1"]
@@ -133,10 +142,30 @@ def orbit_shot(t, t_start, t_end, J_grid, scenes, width):
                 width=width, distance=ORBIT_DISTANCE * width)
 
 
-def camera_path(name, products, shot="close-up"):
+def blend(a, b, w):
+    """Shot a, moving to shot b with weight w (per frame)."""
+    direction = slerp(a["direction"], b["direction"], w)
+    up = slerp(a["up"], b["up"], w)
+    return dict(
+        target=(1 - w[:, None]) * a["target"] + w[:, None] * b["target"],
+        direction=direction,
+        up=normalize(up - np.sum(up * direction, axis=-1, keepdims=True) * direction),
+        width=np.exp((1 - w) * np.log(a["width"]) + w * np.log(b["width"])),
+        distance=np.exp((1 - w) * np.log(a["distance"]) + w * np.log(b["distance"])),
+    )
+
+
+def camera_path(name, products, shot="close-up", story=None, fps=None):
     manifest, scenes, infos = load(name, products)
     t = scenes[0]["t_det_rel"]
     n = len(t)
+    data_fps = float(scenes[0]["fps"])
+    family = None
+    if story is not None:
+        from . import story as storyboard
+
+        board = storyboard.degeneracies(scenes, infos, data_fps, fps or data_fps)
+        family = np.isin(board["sets"], (storyboard.CANONICAL, storyboard.RELABELED))
     t_merge = np.median([info["t_attach_det_rel"] for info in infos])
     slowdown = float(scenes[0]["slowdown"])
     close_up_in = [t_merge - x / slowdown for x in CLOSE_UP_IN]
@@ -151,7 +180,7 @@ def camera_path(name, products, shot="close-up"):
 
     # shot 2: co-rotating close-up of a cluster, from outside, above its orbital plane
     # and a little behind it
-    c, L, spread, radius, n_family, ref = cluster_track(scenes, infos, float(scenes[0]["fps"]))
+    c, L, spread, radius, n_family, ref = cluster_track(scenes, infos, data_fps, family)
     radial = normalize(c - np.sum(c * L, axis=-1, keepdims=True) * L)
     motion = np.cross(L, radial)
     direction = normalize(0.45 * radial + 0.85 * L - 0.3 * motion)
@@ -163,17 +192,49 @@ def camera_path(name, products, shot="close-up"):
         close = orbit_shot(t, close_up_in[0], close_up_out[1], manifest["J_hat_grid"], scenes, W_fit)
 
     w = smoothstep(t, *close_up_in) * (1 - smoothstep(t, *close_up_out))
-    target = (1 - w[:, None]) * axis["target"] + w[:, None] * close["target"]
-    direction = slerp(axis["direction"], close["direction"], w)
-    up = slerp(axis["up"], close["up"], w)
-    up = normalize(up - np.sum(up * direction, axis=-1, keepdims=True) * direction)
-    width = np.exp((1 - w) * np.log(axis["width"]) + w * np.log(close["width"]))
-    distance = np.exp((1 - w) * np.log(axis["distance"]) + w * np.log(close["distance"]))
+    path = blend(axis, close, w)
+    extra = {}
+    data_frame = np.arange(n)
+    if story is not None:
+        # in video frames from here on
+        data_frame = board["data_frame"]
+        path = {k: v[data_frame] for k, v in path.items()}
+        w, c = w[data_frame], c[data_frame]
+        d, up, n_distinct = storyboard.side_view(scenes, board["sets"], board["pause_frame"])
+        m = len(data_frame)
+        width = np.full(m, W_fit[board["pause_frame"]])
+        side = dict(target=np.zeros((m, 3)), direction=np.tile(d, (m, 1)), up=np.tile(up, (m, 1)),
+                    width=width, distance=ORBIT_DISTANCE * width)
+        path = blend(path, side, board["side_weight"])
+        right = np.cross(up, d)  # of the side view, in which the sets move apart
+        J = np.array([s["J_hat_inf"] for s in scenes])[family].mean(axis=0)
+        extra = dict(
+            data_frame=data_frame,
+            side_weight=board["side_weight"],
+            set_opacity=board["set_opacity"],
+            set_offset=board["set_shift"][:, :, None] * width[0] * right,
+            swap=board["swap"],
+            sets=board["sets"],
+            set_labels=np.array(manifest["labels"]),
+            grid_normal=J / np.linalg.norm(J),
+            caption_text=np.array([x["text"] for x in board["captions"]]),
+            caption_row=np.array([x["row"] for x in board["captions"]]),
+            caption_in=np.array([x["t_in"] for x in board["captions"]]),
+            caption_out=np.array([x["t_out"] for x in board["captions"]]),
+            caption_x=np.array([x["x"] for x in board["captions"]]),
+        )
+        print(f"storyboard: {m} video frames at {fps or data_fps:g} fps, paused at data frame "
+              f"{board['pause_frame']}; side view {np.round(d, 2)} ({n_distinct} distinct clusters); "
+              f"sets {np.bincount(board['sets'], minlength=storyboard.N_SETS).tolist()} "
+              f"(canonical, theta, psi, psi+theta, relabeled)")
+    target, direction, up = path["target"], path["direction"], path["up"]
+    width, distance = path["width"], path["distance"]
     fov = 2 * np.arctan(width / (2 * distance))
 
     off_axis = np.degrees(np.arccos(np.clip(direction[:, 2], -1, 1)))
     out = dict(
-        t_det_rel=t,
+        t_det_rel=t[data_frame],
+        fps=(fps or data_fps) if story else data_fps,
         location=target + distance[:, None] * direction,
         target=target,
         direction=direction,
@@ -185,11 +246,12 @@ def camera_path(name, products, shot="close-up"):
         earth_marker=smoothstep(off_axis, 4, 15),
         close_up_weight=w,
         cluster_centroid=c,
+        **extra,
     )
     np.savez(products / f"{name}_camera.npz", **out)
     what = ("orbit around the centre of mass" if shot == "orbit" else
             f"close-up on a cluster of the {n_family}-sample family (reference sample {manifest['labels'][ref]})")
-    print(f"{name}: {n} frames, merger at {t_merge:.4f} s; {what}; "
+    print(f"{name}: {len(data_frame)} frames, merger at {t_merge:.4f} s; {what}; "
           f"max off-axis angle {off_axis.max():.0f} deg")
     return out
 

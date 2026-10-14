@@ -32,9 +32,11 @@ Grid: perpendicular to the mean J(t -> -inf) of the set, after reflecting the J'
 pointing away from us through the sky plane (theta_JN is bimodal, and mirror images
 through the sky plane look the same in an orthographic view along the line of sight).
 
-Sky orientation: psi and psi + pi give identical detector responses, and bilby
-samples psi in [0, pi). Each sample is shown with the representative that puts the
-sky projection of its J(t -> -inf) on the same side as the (axial) mean of the set.
+Sky orientation: psi and psi + pi give identical detector responses, so the data allow
+each configuration and its rotation by pi about the line of sight equally. bilby samples
+psi in [0, pi), an arbitrary cut; each sample is shown at psi or psi + pi with
+probability 1/2 (seeded by its posterior index), so that the cloud shows the full
+uncertainty.
 """
 
 import json
@@ -205,19 +207,12 @@ def export_set(event, indices, name, processes=8):
     with Pool(min(processes, len(samples))) as pool:
         results = pool.map(_export_one, [(event.name, s) for s in samples], chunksize=1)
 
-    J_xy = np.array([out["J_hat_inf"][:2] for out, _ in results])
-    reference = axial_mean_angle(J_xy)
-    axis = np.array([np.cos(reference), np.sin(reference)])
-    # the axial mean is defined mod pi: orient it so that most samples keep bilby's psi
-    if np.count_nonzero(J_xy @ axis < 0) > len(J_xy) / 2:
-        axis = -axis
-
     scenes = event.products / "scenes"
     scenes.mkdir(parents=True, exist_ok=True)
     labels = []
     for index, (out, info) in zip(indices, results):
         info["psi_shown"] = info["sample"]["psi"]
-        if out["J_hat_inf"][:2] @ axis < 0:
+        if np.random.default_rng(index).random() < 0.5:
             rotate_by_pi_about_line_of_sight(out, info)
         label = f"sample{index}"
         info["label"] = label

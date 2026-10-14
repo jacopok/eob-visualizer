@@ -14,6 +14,9 @@ in the event's detector, the median merger and the camera's shot changes; a text
 corner of the view (not rendered) shows the time of the current frame.
 
 All the physics is in the exported arrays; this script only draws them.
+The video frames are those of the camera path: with a storyboard (`camera.py --story`)
+each one shows the data frame `data_frame`, each set of samples (`story.py`) has its own
+materials, faded by its animated opacity, and the BHs of the relabeled set swap colours.
 World frame = sky frame of `physics.py`: X west, Y north, Z towards Earth.
 The camera follows the path computed by `camera.py`; on the line of sight (+Z) it is far
 away (nearly orthographic). When it leaves the line of sight, a camera icon on +Z,
@@ -491,6 +494,87 @@ def visibility(n_frames, shown_from, shown_until, size=1.0):
     return np.repeat(s[:, None], 3, axis=1)
 
 
+# per-frame arrays of a scene file
+PER_FRAME_KEYS = ("t_det_rel", "t_wave", "merged", "x1", "x2", "chi1", "chi2", "LN_hat", "now_phase",
+                  "deformation", "remnant_offset")
+
+
+def story_material(mat, opacity_attribute, swap=None):
+    """Fade the material by the scene property `opacity_attribute` (mixing it with a
+    transparent shader) and, with swap = (colour, other colour), turn its colour into the
+    other one with the scene property "swap"."""
+    nt = mat.node_tree
+    out = next(node for node in nt.nodes if node.type == "OUTPUT_MATERIAL")
+    surface = out.inputs["Surface"].links[0].from_socket
+
+    def scene_property(name):
+        attr = nt.nodes.new("ShaderNodeAttribute")
+        attr.attribute_type, attr.attribute_name = "VIEW_LAYER", name
+        return attr.outputs["Fac"]
+
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    nt.links.new(scene_property(opacity_attribute), mix.inputs["Fac"])
+    nt.links.new(nt.nodes.new("ShaderNodeBsdfTransparent").outputs[0], mix.inputs[1])
+    nt.links.new(surface, mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs["Surface"])
+    if swap is None:
+        return
+    for node in list(nt.nodes):
+        for socket in node.inputs:
+            if socket.type == "RGBA" and not socket.is_linked and np.allclose(socket.default_value[:3], swap[0], atol=1e-4):
+                m = nt.nodes.new("ShaderNodeMix")
+                m.data_type = "RGBA"
+                m.inputs[6].default_value = (*swap[0], 1)
+                m.inputs[7].default_value = (*swap[1], 1)
+                nt.links.new(scene_property("swap"), m.inputs["Factor"])
+                nt.links.new(m.outputs[2], socket)
+
+
+def animate_story_materials(set_mats, track, draft, colors):
+    """Opacities of the sets and the colour swap of the relabeled one (set 4): as material
+    colours in Workbench (--draft), else as scene properties read by the shaders."""
+    opacity, swap = track["set_opacity"], track["swap"]
+    if draft:
+        for s, mats in set_mats.items():
+            for k, c in colors.items():
+                mat = mats[f"body{k}"]  # shared by the body, its arrow and its trail
+                mat.surface_render_method = "BLENDED"
+                c = np.array(c)
+                if s == 4 and k in ("1", "2"):
+                    other = np.array(colors["2" if k == "1" else "1"])
+                    rgb = (1 - swap[:, None]) * c + swap[:, None] * other
+                else:
+                    rgb = np.tile(c, (len(swap), 1))
+                animate(mat, "diffuse_color", np.c_[rgb, opacity[:, s]])
+        return
+    scene = bpy.context.scene
+    for name, values in (("swap", swap), *((f"set{s}", opacity[:, s]) for s in set_mats)):
+        if name not in scene:  # (once, also when called again for the highlighted sample)
+            scene[name] = 0.0
+            animate(scene, f'["{name}"]', values)
+    for s, mats in set_mats.items():
+        for mat in {m.name: m for m in mats.values()}.values():
+            k = mat.name[-1]  # materials are named <prefix><part><k>
+            relabeled = s == 4 and k in ("1", "2")
+            story_material(mat, f"set{s}", (colors[k], colors["2" if k == "1" else "1"]) if relabeled else None)
+
+
+def move_sets(set_of, offsets):
+    """Parent the objects of each sample to an empty of its set, moved by `offsets`
+    (frames, sets, 3) [km]; the set of the trails of --draft is in their name."""
+    empties = {}
+    for s in set(set_of.values()):
+        empties[s] = new_object(f"set{s}_offset", None)
+        animate(empties[s], "location", bu(offsets[:, s]))
+    for obj in bpy.data.objects:
+        label = obj.name.removeprefix("maxL_").split("_")[0]
+        s = set_of.get(label)
+        if s is None and obj.name.startswith("set") and "_trails" in obj.name:
+            s = int(obj.name[3:obj.name.index("_")])
+        if s is not None and obj.parent is None:
+            obj.parent = empties[s]
+
+
 def build_sample(d, mats, sphere_mesh, tube_groups, label, style, cut_trails=None):
     """The objects of one sample; with `cut_trails` (--draft), its trails are added to
     those lists (one per body) instead, for `make_cut_trails`."""
@@ -681,6 +765,12 @@ def build(manifest_file, camera_file, body_alpha, glow, style, draft=False, max_
              for k, v in style.items()}
     print(f"length scale {scale} (grid spacing {scale * GRID_SPACING_KM:.0f} km)")
 
+    track = load_scene(camera_file)
+    data_frame = track.get("data_frame")
+    story = "set_opacity" in track
+    set_of = dict(zip(track["set_labels"].tolist(), track["sets"].tolist())) if story else {}
+    sets = sorted(set(set_of.values())) if story else [0]
+
     scene = bpy.context.scene
     for obj in list(bpy.data.objects):
         bpy.data.objects.remove(obj)
@@ -690,32 +780,58 @@ def build(manifest_file, camera_file, body_alpha, glow, style, draft=False, max_
     world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.012, 0.012, 0.02, 1)
     scene.world = world
 
-    make_grid(manifest["J_hat_grid"], glow_material("grid", (0.35, 0.35, 0.4), 0.6), scale)
+    grid_material = glow_material("grid", (0.35, 0.35, 0.4), 0.6)
+    make_grid(track["grid_normal"] if "grid_normal" in track else manifest["J_hat_grid"], grid_material, scale)
+    if "side_weight" in track:  # nearly edge-on in the side view: fade it out
+        grid_opacity = 1 - 0.85 * track["side_weight"]
+        if draft:
+            grid_material.surface_render_method = "BLENDED"
+            animate(grid_material, "diffuse_color", np.c_[np.tile((0.35, 0.35, 0.4), (len(grid_opacity), 1)),
+                                                          grid_opacity])
+        else:
+            scene["grid"] = 1.0
+            animate(scene, '["grid"]', grid_opacity)
+            story_material(grid_material, "grid")
 
     if draft:
         world.color = (0.012, 0.012, 0.02)  # the Workbench background
-        mats = draft_sample_materials()
+        set_mats = {s: draft_sample_materials(prefix=f"set{s}_") for s in sets}
         sphere = unit_sphere_mesh("unit_sphere", segments=16)
         window = style["trail_cutoff"][1]
     else:
         if style["body"] == "lit" or style["arrow"] == "lit":
             add_lights()
-        mats = sample_materials(style, style.get("body_alpha", body_alpha), glow)
+        set_mats = {s: sample_materials(style, style.get("body_alpha", body_alpha), glow, prefix=f"set{s}_")
+                    for s in sets}
         sphere = unit_sphere_mesh("unit_sphere")
         window = None
-    tubes = [tube_node_group(style["trail_radius_km"], mats[f"trail{k}"], window) for k in (1, 2)]
+    set_tubes = {s: [tube_node_group(style["trail_radius_km"], mats[f"trail{k}"], window) for k in (1, 2)]
+                 for s, mats in set_mats.items()}
 
-    cut_trails = ([], []) if draft else None
+    def load_sample(label):
+        d = load_scene(scenes / f"{label}.npz")
+        if data_frame is not None:
+            d.update({k: d[k][data_frame] for k in PER_FRAME_KEYS})
+        return d
+
+    cut_trails = {s: ([], []) for s in sets} if draft else {s: None for s in sets}
     best = max(labels, key=likelihood) if style["highlight"] and n > 1 else None
     for label in labels:
-        d = load_scene(scenes / f"{label}.npz")
-        n_frames, fps = len(d["t_det_rel"]), int(d["fps"])
+        d = load_sample(label)
+        n_frames = len(d["t_det_rel"])
         timeline = {k: d[k] for k in ("t_det_rel", "ifo", "reference_time")}
+        s = set_of.get(label, 0)
         if label != best:
-            build_sample(d, mats, sphere, tubes, label, style, cut_trails)
+            build_sample(d, set_mats[s], sphere, set_tubes[s], label, style, cut_trails[s])
     if draft:
-        for k in (1, 2):
-            make_cut_trails(f"trails{k}", cut_trails[k - 1], mats[f"trail{k}"], tubes[k - 1])
+        for s in sets:
+            for k in (1, 2):
+                make_cut_trails(f"set{s}_trails{k}", cut_trails[s][k - 1], set_mats[s][f"trail{k}"],
+                                set_tubes[s][k - 1])
+    fps = float(track["fps"]) if "fps" in track else float(d["fps"])
+    colors = {"1": COLOR_1, "2": COLOR_2, "f": COLOR_F}
+    if story:
+        animate_story_materials(set_mats, track, draft, colors)
 
     if best is not None:
         if draft:
@@ -726,13 +842,16 @@ def build(manifest_file, camera_file, body_alpha, glow, style, draft=False, max_
                                   None if window is None else 1.0) for k in (1, 2)]
         hstyle = dict(style, arrow_radius_km=style["highlight_arrow_radius_km"])
         hcut_trails = ([], []) if draft else None
-        build_sample(load_scene(scenes / f"{best}.npz"), hmats, sphere, htubes, f"maxL_{best}", hstyle,
-                     hcut_trails)
+        build_sample(load_sample(best), hmats, sphere, htubes, f"maxL_{best}", hstyle, hcut_trails)
         if draft:
             for k in (1, 2):
                 make_cut_trails(f"maxL_{best}_trail{k}", hcut_trails[k - 1], hmats[f"trail{k}"], htubes[k - 1])
+        if story:
+            light = {k: tuple(0.45 * np.array(c) + 0.55) for k, c in colors.items()}
+            animate_story_materials({set_of[best]: hmats}, track, draft, light)
 
-    track = load_scene(camera_file)
+    if story:
+        move_sets(set_of, track["set_offset"])
     assert len(track["width"]) == n_frames
     camera_quaternions = make_camera(track, scene)
     label = make_earth_marker(track, glow_material("earth", (1.0, 0.85, 0.5), 1.0))
@@ -741,7 +860,7 @@ def build(manifest_file, camera_file, body_alpha, glow, style, draft=False, max_
 
     scene.frame_start = 0
     scene.frame_end = n_frames - 1
-    scene.render.fps = fps
+    scene.render.fps = int(round(fps))
     t_merge = float(np.median([info["t_attach_det_rel"] for info in infos.values()]))  # of all the samples
     add_time_markers(scene, timeline, t_merge, track)
     return scene, timeline, t_merge, track
