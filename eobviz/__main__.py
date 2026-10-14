@@ -6,6 +6,7 @@
     python -m eobviz render EVENT --name cloud200 [blender_scene.py options, e.g. --style solid_highlight]
     python -m eobviz panel EVENT --name cloud200 [--no-video]
     python -m eobviz scene EVENT --name cloud200 [blender_scene.py options]   # interactive Blender
+        (fast, plain look for iterating: --draft [--max-samples 50], with scene or render)
     python -m eobviz events
 
 The command re-runs itself in the event's Python environment (`events.EVENTS`) if it is

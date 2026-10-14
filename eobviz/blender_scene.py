@@ -25,6 +25,12 @@ and the trails are thin and alpha-blended, saturating to the body colour, so tha
 picture does not depend on the drawing order of the samples. "solid_highlight" adds the
 max-likelihood sample in lighter colours, with longer opaque trails. Trails fade with the orbital
 phase elapsed since the body passed there.
+
+--draft is for iterating on timing and camera: Workbench (solid shading) instead of EEVEE,
+plain coloured low-poly spheres and arrows, and trails cut to their last fraction of an
+orbit by geometry nodes instead of fading in the shader (all the trails of a body in one
+object). Frames render in ~0.2 s instead of ~5 s; the interactive view plays 200 samples at
+~16 fps, and real time with `--max-samples 50`.
 """
 
 import argparse
@@ -80,7 +86,8 @@ def parse_args():
     p.add_argument("--event", default=None, help="e.g. GW250114, with --name")
     p.add_argument("--name", default=None, help="scene set, e.g. cloud200")
     p.add_argument("--manifest", default=None, help="products/<name>.json, instead of --event and --name")
-    p.add_argument("--outdir", default=None, help="frames and .blend (default: <event>/renders/<name>)")
+    p.add_argument("--outdir", default=None,
+                   help="frames and .blend (default: <event>/renders/<name>, <name>_draft with --draft)")
     p.add_argument("--camera", default=None, help="camera path (default: products/<name>_camera.npz)")
     p.add_argument("--frames", default=None,
                    help="start:stop (python slice of frame indices) or a comma-separated list of frames")
@@ -92,6 +99,10 @@ def parse_args():
                    help="brightness of trails, arrows and rims (default: min(1, 4 / N)^0.35);"
                         " trails, which overlap most, scale with its square")
     p.add_argument("--style", default="glow", choices=sorted(STYLES))
+    p.add_argument("--max-samples", type=int, default=None,
+                   help="show only the first N samples of the set (and the max-likelihood one)")
+    p.add_argument("--draft", action="store_true",
+                   help="fast, plain look (Workbench, solid colours, cut trails) for iterating")
     p.add_argument("--save-blend", action="store_true")
     p.add_argument("--no-render", action="store_true")
     p.add_argument("--interactive", action="store_true",
@@ -106,7 +117,7 @@ def parse_args():
         args.manifest = str(event_directory(args.event) / "products" / f"{args.name}.json")
     manifest = Path(args.manifest)
     if args.outdir is None:
-        args.outdir = str(manifest.parent.parent / "renders" / manifest.stem)
+        args.outdir = str(manifest.parent.parent / "renders" / (manifest.stem + ("_draft" if args.draft else "")))
     return args
 
 
@@ -198,6 +209,7 @@ def glow_material(name, color, strength, fade_cutoff=None):
     along the trail (`trail_fade`)."""
     mat, n = blended_material(name)
     mat.use_backface_culling = False
+    mat.diffuse_color = (*color, 1)  # in Workbench (--draft)
     out = n.new("ShaderNodeOutputMaterial")
     em = n.new("ShaderNodeEmission", Color=(*color, 1))
     if fade_cutoff is not None:
@@ -277,6 +289,14 @@ def solid_emission_material(name, color, strength=1.0):
     return mat
 
 
+def draft_material(name, color):
+    """Plain colour, for Workbench (--draft)."""
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = (*color, 1)
+    mat.roughness = 0.6
+    return mat
+
+
 def add_lights():
     """Key light from the observer's upper left, a dimmer fill from behind."""
     for name, direction, energy in (("key", (-0.5, 0.6, 1.0), 4.0), ("back", (0.6, -0.3, -1.0), 1.5)):
@@ -288,10 +308,10 @@ def add_lights():
         obj.rotation_quaternion = direction_quaternion(direction)
 
 
-def unit_sphere_mesh(name):
+def unit_sphere_mesh(name, segments=48):
     mesh = bpy.data.meshes.new(name)
     bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=48, v_segments=24, radius=1.0)
+    bmesh.ops.create_uvsphere(bm, u_segments=segments, v_segments=segments // 2, radius=1.0)
     for f in bm.faces:
         f.smooth = True
     bm.to_mesh(mesh)
@@ -327,24 +347,48 @@ def arrow_mesh(name, length_km, radius_km, collar_km=None):
     return mesh
 
 
-def tube_node_group(radius_km, mat):
+def tube_node_group(radius_km, mat, window=None):
     """Geometry nodes turning a polyline mesh into a tube with material `mat`
-    (lost in the conversion otherwise), keeping its point attributes."""
+    (lost in the conversion otherwise), keeping its point attributes. With `window`
+    (orbits), only the points with now - window < phase <= now are kept, from their point
+    attributes `shown_from` and `shown_until` (frames, `trail_window_frames`): the trail
+    of --draft, which cannot fade."""
     ng = bpy.data.node_groups.new(f"tube_{mat.name}", "GeometryNodeTree")
     ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
     ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
     n = Nodes(ng)
     gi, go = n.new("NodeGroupInput"), n.new("NodeGroupOutput")
     m2c = n.new("GeometryNodeMeshToCurve")
-    circle = n.new("GeometryNodeCurvePrimitiveCircle", Resolution=6, Radius=float(bu(radius_km)))
+    circle = n.new("GeometryNodeCurvePrimitiveCircle", Resolution=6 if window is None else 4,
+                   Radius=float(bu(radius_km)))
     c2m = n.new("GeometryNodeCurveToMesh")
     set_mat = n.new("GeometryNodeSetMaterial", Material=mat)
-    n.link(gi.outputs["Geometry"], m2c.inputs["Mesh"])
+    if window is None:
+        n.link(gi.outputs["Geometry"], m2c.inputs["Mesh"])
+    else:
+        ng["window"] = window
+        frame = n.new("GeometryNodeInputSceneTime").outputs["Frame"]
+        shown_from, shown_until = (n.new("GeometryNodeInputNamedAttribute", data_type="FLOAT", Name=name)
+                                   .outputs["Attribute"] for name in ("shown_from", "shown_until"))
+        outside = n.math("MAXIMUM", n.math("LESS_THAN", frame, shown_from),
+                         n.math("LESS_THAN", n.math("SUBTRACT", shown_until, frame), 0.5))
+        cut = n.new("GeometryNodeDeleteGeometry", domain="POINT")
+        n.link(gi.outputs["Geometry"], cut.inputs["Geometry"])
+        n.link(outside, cut.inputs["Selection"])
+        n.link(cut.outputs["Geometry"], m2c.inputs["Mesh"])
     n.link(m2c.outputs["Curve"], c2m.inputs["Curve"])
     n.link(circle.outputs["Curve"], c2m.inputs["Profile Curve"])
     n.link(c2m.outputs["Mesh"], set_mat.inputs["Geometry"])
     n.link(set_mat.outputs["Geometry"], go.inputs[0])
     return ng
+
+
+def trail_window_frames(phase, now_phase, window):
+    """First and last+1 frames at which the trail point of orbital phase `phase` is within
+    `window` orbits behind the body (now_phase, per frame, does not decrease); the number
+    of frames if never."""
+    return (np.searchsorted(now_phase, phase, side="left"),  # first frame with now >= phase
+            np.searchsorted(now_phase, phase + window, side="left"))  # ... with now >= phase + window
 
 
 def make_trail(name, points_km, phase, mat, node_group):
@@ -355,6 +399,25 @@ def make_trail(name, points_km, phase, mat, node_group):
     obj = new_object(name, mesh, mat)
     obj.modifiers.new("tube", "NODES").node_group = node_group
     obj["now"] = 0.0
+    return obj
+
+
+def make_cut_trails(name, trails, mat, node_group):
+    """The trails [(points_km, phase, now_phase)] of one body of all the samples as one
+    object, cut by `node_group` (with a window): one modifier evaluation per frame
+    instead of one per sample, which makes most of the cost of a --draft frame."""
+    window = node_group["window"]
+    pts = bu(np.concatenate([t[0] for t in trails]))
+    starts = np.cumsum([0] + [len(t[0]) for t in trails])[:-1]
+    edges = np.concatenate([s + np.c_[np.arange(len(t[0]) - 1), np.arange(1, len(t[0]))]
+                            for s, t in zip(starts, trails)])
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(pts.tolist(), edges.tolist(), [])
+    shown = [np.concatenate(f) for f in zip(*(trail_window_frames(phase, now, window) for _, phase, now in trails))]
+    for attribute, frames in zip(("shown_from", "shown_until"), shown):
+        mesh.attributes.new(attribute, "FLOAT", "POINT").data.foreach_set("value", frames.astype(np.float32))
+    obj = new_object(name, mesh, mat)
+    obj.modifiers.new("tube", "NODES").node_group = node_group
     return obj
 
 
@@ -428,7 +491,9 @@ def visibility(n_frames, shown_from, shown_until, size=1.0):
     return np.repeat(s[:, None], 3, axis=1)
 
 
-def build_sample(d, mats, sphere_mesh, tube_groups, label, style):
+def build_sample(d, mats, sphere_mesh, tube_groups, label, style, cut_trails=None):
+    """The objects of one sample; with `cut_trails` (--draft), its trails are added to
+    those lists (one per body) instead, for `make_cut_trails`."""
     n_frames = len(d["t_det_rel"])
     merged = d["merged"]
     f_merge = int(np.argmax(merged)) if merged.any() else n_frames
@@ -447,6 +512,9 @@ def build_sample(d, mats, sphere_mesh, tube_groups, label, style):
         animate(bh, "location", bu(d[f"x{k}"]))
         animate(arrow, "location", bu(d[f"x{k}"]))
         animate(arrow, "rotation_quaternion", direction_quaternions(d[f"chi{k}"]))
+        if cut_trails is not None:
+            cut_trails[k - 1].append((d[f"trail{k}"], d["trail_phase"], d["now_phase"]))
+            continue
         trail = make_trail(f"{label}_trail{k}", d[f"trail{k}"], d["trail_phase"], mats[f"trail{k}"],
                            tube_groups[k - 1])
         animate(trail, '["now"]', d["now_phase"])
@@ -583,10 +651,24 @@ def sample_materials(style, body_alpha, glow, prefix="", strong=False):
     return mats
 
 
-def build(manifest_file, camera_file, body_alpha, glow, style):
+def draft_sample_materials(prefix="", strong=False):
+    """Plain colours for --draft: bodies, arrows and trails of a body share one."""
+    mats = {}
+    for k, color in (("1", COLOR_1), ("2", COLOR_2), ("f", COLOR_F)):
+        if strong:  # lighter than the cloud
+            color = tuple(0.45 * np.array(color) + 0.55)
+        mats[f"body{k}"] = mats[f"arrow{k}"] = mats[f"trail{k}"] = draft_material(f"{prefix}draft{k}", color)
+    return mats
+
+
+def build(manifest_file, camera_file, body_alpha, glow, style, draft=False, max_samples=None):
     manifest = json.load(open(manifest_file))
     scenes = Path(manifest_file).parent / "scenes"
-    labels = manifest["labels"]
+    infos = {label: json.load(open(scenes / f"{label}.json")) for label in manifest["labels"]}
+    likelihood = lambda label: infos[label]["sample"]["log_likelihood"]
+    labels = manifest["labels"][:max_samples]
+    if max(infos, key=likelihood) not in labels:  # with --max-samples
+        labels.append(max(infos, key=likelihood))
     n = len(labels)
     if body_alpha is None:
         body_alpha = 1.0 if n == 1 else min(0.35, 15 / n)
@@ -610,28 +692,45 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
 
     make_grid(manifest["J_hat_grid"], glow_material("grid", (0.35, 0.35, 0.4), 0.6), scale)
 
-    if style["body"] == "lit" or style["arrow"] == "lit":
-        add_lights()
-    mats = sample_materials(style, style.get("body_alpha", body_alpha), glow)
-    sphere = unit_sphere_mesh("unit_sphere")
-    tubes = [tube_node_group(style["trail_radius_km"], mats[f"trail{k}"]) for k in (1, 2)]
+    if draft:
+        world.color = (0.012, 0.012, 0.02)  # the Workbench background
+        mats = draft_sample_materials()
+        sphere = unit_sphere_mesh("unit_sphere", segments=16)
+        window = style["trail_cutoff"][1]
+    else:
+        if style["body"] == "lit" or style["arrow"] == "lit":
+            add_lights()
+        mats = sample_materials(style, style.get("body_alpha", body_alpha), glow)
+        sphere = unit_sphere_mesh("unit_sphere")
+        window = None
+    tubes = [tube_node_group(style["trail_radius_km"], mats[f"trail{k}"], window) for k in (1, 2)]
 
-    infos = [json.load(open(scenes / f"{label}.json")) for label in labels]
-    best = None
-    if style["highlight"] and n > 1:
-        best = labels[int(np.argmax([info["sample"]["log_likelihood"] for info in infos]))]
+    cut_trails = ([], []) if draft else None
+    best = max(labels, key=likelihood) if style["highlight"] and n > 1 else None
     for label in labels:
         d = load_scene(scenes / f"{label}.npz")
         n_frames, fps = len(d["t_det_rel"]), int(d["fps"])
         timeline = {k: d[k] for k in ("t_det_rel", "ifo", "reference_time")}
         if label != best:
-            build_sample(d, mats, sphere, tubes, label, style)
+            build_sample(d, mats, sphere, tubes, label, style, cut_trails)
+    if draft:
+        for k in (1, 2):
+            make_cut_trails(f"trails{k}", cut_trails[k - 1], mats[f"trail{k}"], tubes[k - 1])
 
     if best is not None:
-        hmats = sample_materials(style, 1.0, glow, prefix="maxL_", strong=True)
-        htubes = [tube_node_group(style["highlight_trail_radius_km"], hmats[f"trail{k}"]) for k in (1, 2)]
+        if draft:
+            hmats = draft_sample_materials(prefix="maxL_", strong=True)
+        else:
+            hmats = sample_materials(style, 1.0, glow, prefix="maxL_", strong=True)
+        htubes = [tube_node_group(style["highlight_trail_radius_km"], hmats[f"trail{k}"],
+                                  None if window is None else 1.0) for k in (1, 2)]
         hstyle = dict(style, arrow_radius_km=style["highlight_arrow_radius_km"])
-        build_sample(load_scene(scenes / f"{best}.npz"), hmats, sphere, htubes, f"maxL_{best}", hstyle)
+        hcut_trails = ([], []) if draft else None
+        build_sample(load_scene(scenes / f"{best}.npz"), hmats, sphere, htubes, f"maxL_{best}", hstyle,
+                     hcut_trails)
+        if draft:
+            for k in (1, 2):
+                make_cut_trails(f"maxL_{best}_trail{k}", hcut_trails[k - 1], hmats[f"trail{k}"], htubes[k - 1])
 
     track = load_scene(camera_file)
     assert len(track["width"]) == n_frames
@@ -643,7 +742,7 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
     scene.frame_start = 0
     scene.frame_end = n_frames - 1
     scene.render.fps = fps
-    t_merge = float(np.median([info["t_attach_det_rel"] for info in infos]))
+    t_merge = float(np.median([info["t_attach_det_rel"] for info in infos.values()]))  # of all the samples
     add_time_markers(scene, timeline, t_merge, track)
     return scene, timeline, t_merge, track
 
@@ -692,9 +791,9 @@ def make_clock(scene, timeline, t_merge, material):
     bpy.app.handlers.frame_change_post.append(update)
 
 
-def setup_gui(scene, track):
+def setup_gui(scene, track, draft=False):
     """Look through the scene camera, with clipping that fits the scene and a rendered
-    view; play back dropping frames to keep real time."""
+    view (solid with --draft); play back dropping frames to keep real time."""
     clip_end = float(bu(4 * track["distance"].max()))
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
@@ -702,7 +801,12 @@ def setup_gui(scene, track):
                 continue
             space = area.spaces.active
             space.clip_start, space.clip_end = 0.01, clip_end
-            space.shading.type = "RENDERED"
+            if draft:
+                space.shading.type = "SOLID"
+                space.shading.color_type = "MATERIAL"
+                space.shading.background_type = "WORLD"
+            else:
+                space.shading.type = "RENDERED"
             space.region_3d.view_perspective = "CAMERA"
     try:
         scene.sync_mode = "FRAME_DROP"
@@ -715,13 +819,19 @@ def main():
     args = parse_args()
     camera = args.camera or str(Path(args.manifest).with_name(Path(args.manifest).stem + "_camera.npz"))
     scene, timeline, t_merge, track = build(args.manifest, camera, args.body_alpha, args.glow,
-                                            STYLES[args.style])
+                                            STYLES[args.style], args.draft, args.max_samples)
     w, h = map(int, args.resolution.split("x"))
     scene.render.resolution_x, scene.render.resolution_y = w, h
     scene.render.resolution_percentage = 100
 
-    scene.render.engine = "BLENDER_EEVEE"
-    scene.eevee.taa_render_samples = args.samples
+    if args.draft:
+        scene.render.engine = "BLENDER_WORKBENCH"
+        scene.display.shading.light = "STUDIO"
+        scene.display.shading.color_type = "MATERIAL"
+        scene.display.render_aa = "FXAA"
+    else:
+        scene.render.engine = "BLENDER_EEVEE"
+        scene.eevee.taa_render_samples = args.samples
     scene.view_settings.view_transform = "Standard"
     scene.render.image_settings.file_format = "PNG"
 
@@ -733,7 +843,7 @@ def main():
         make_clock(scene, timeline, t_merge, glow_material("clock", (1.0, 0.85, 0.5), 1.0))
         if not bpy.app.background:
             # once the window is up
-            bpy.app.timers.register(lambda: setup_gui(scene, track), first_interval=0.1)
+            bpy.app.timers.register(lambda: setup_gui(scene, track, args.draft), first_interval=0.1)
         return
     if args.no_render:
         return

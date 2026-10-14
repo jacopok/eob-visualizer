@@ -15,7 +15,7 @@ python -m eobviz export GW190521 --n-samples 200   # scene data -> products/scen
 python -m eobviz camera GW190521 --name cloud200
 python -m eobviz render GW190521 --name cloud200
 python -m eobviz panel GW190521 --name cloud200    # -> renders/cloud200.mp4
-python -m eobviz scene GW190521 --name cloud200    # explore the scene in Blender
+python -m eobviz scene GW190521 --name cloud200    # explore the scene in Blender (--draft: fast, plain look)
 ```
 
 The event's settings, data and phase handling are in `eobviz/events/gw190521.py`.

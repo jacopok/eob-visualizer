@@ -33,6 +33,7 @@ python -m eobviz camera GW150914 --name cloud200 [--shot orbit]
 python -m eobviz render GW150914 --name cloud200 --style solid_highlight
 python -m eobviz panel GW150914 --name cloud200      # panel frames, final video
 python -m eobviz scene GW150914 --name cloud200      # open the scene in Blender
+python -m eobviz scene GW150914 --name cloud200 --draft --max-samples 50   # fast, plain look
 ```
 
 `scene` opens the event in Blender's GUI instead of rendering it. Scrub the timeline or
@@ -40,6 +41,12 @@ play it to move back and forth in time, and look through the animated camera (nu
 or fly around freely. Timeline markers show detector time, the median merger and the
 camera's shot changes; a text in the corner of the view (not rendered) shows the current
 time. `render ... --save-blend` also saves the scene as `renders/<name>/scene.blend`.
+
+For iterating on timing and camera, `--draft` (with `scene` or `render`) swaps the look for
+plain coloured spheres and arrows in Workbench, with the trails cut to their last fraction
+of an orbit instead of fading: about 0.2 s per rendered frame instead of ~5 s (frames go to
+`renders/<name>_draft/`), and 16 fps of playback for 200 samples. `--max-samples N` shows only
+N of the samples (and the max-likelihood one); with 50, draft playback is real time.
 
 A new event needs an `Event` subclass (and a model class if its waveform model is new),
 registered in `eobviz/events/__init__.py`.

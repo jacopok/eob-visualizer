@@ -15,7 +15,7 @@ python -m eobviz export GW250114 --n-samples 200       # per-frame scene data ->
 python -m eobviz camera GW250114 --name cloud200       # camera path -> products/cloud200_camera.npz
 python -m eobviz render GW250114 --name cloud200 --style solid_highlight --save-blend   # -> renders/cloud200/
 python -m eobviz panel GW250114 --name cloud200        # panel frames + final video renders/cloud200.mp4
-python -m eobviz scene GW250114 --name cloud200        # explore the scene in Blender, back and forth in time
+python -m eobviz scene GW250114 --name cloud200        # explore the scene in Blender, back and forth in time (--draft: fast, plain look)
 ```
 
 The code is in `../eobviz` (see the repository README); `python -m eobviz` switches to this

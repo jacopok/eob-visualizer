@@ -14,7 +14,7 @@ python -m eobviz export GW150914 --n-samples 200       # scene data -> products/
 python -m eobviz camera GW150914 --name cloud200 --shot orbit
 python -m eobviz render GW150914 --name cloud200 --style solid_highlight
 python -m eobviz panel GW150914 --name cloud200        # -> renders/cloud200.mp4
-python -m eobviz scene GW150914 --name cloud200        # explore the scene in Blender
+python -m eobviz scene GW150914 --name cloud200        # explore the scene in Blender (--draft: fast, plain look)
 ```
 
 The TEOBResumS call is in `eobviz/models/teob_dali.py`, the event's settings and data in
