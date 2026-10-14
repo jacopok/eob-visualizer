@@ -1,42 +1,31 @@
-"""SEOBNRv4PHM dynamics of GW190521 posterior samples (GWTC-2.1 release, LALInference run).
+"""SEOBNRv4PHM (LALSimulation) dynamics of a posterior sample, called as LALInference did.
 
-The waveform model is called as LALInference called it: SimInspiralChooseTDWaveform with
-the Cartesian spins of the sample, iota, phase, f_min = 5 Hz (fmin-template) and
-sampling rate 512 Hz. SEOBNRv4PHM ignores f_ref: the spins are those at f_min, and the
-phase is defined at coalescence. ChooseTDWaveform calls SimIMRSpinPrecEOBWaveform, which
-calls SimIMRSpinPrecEOBWaveformAll with fixed flags; the latter also returns the
-dynamics, so we call it directly with the same flags (identified by reproducing the
-ChooseTDWaveform polarizations to machine precision, `validate_v4phm.py`), and apply the
-polarization rotation by -pi/2 (an overall sign) that ChooseTDWaveform applies.
+The model is called as SimInspiralChooseTDWaveform with the Cartesian spins of the
+sample, iota, phase, f_min and the sampling rate. SEOBNRv4PHM ignores f_ref: the spins
+are those at f_min, and the phase is defined at coalescence. ChooseTDWaveform calls
+SimIMRSpinPrecEOBWaveform, which calls SimIMRSpinPrecEOBWaveformAll with fixed flags;
+the latter also returns the dynamics, so we call it directly with the same flags
+(identified by reproducing the ChooseTDWaveform polarizations to machine precision,
+`gw190521/validate_v4phm.py`), and apply the polarization rotation by -pi/2 (an overall
+sign) that ChooseTDWaveform applies.
 
 Frames: the dynamics are integrated in the LAL L0 frame of f_min (z along L_N, x along
-the separation vector at the start); `observer_direction_I` and `rotation_I_to_sky`
-from the GW250114 module apply (checked in `validate_v4phm.py`).
+the separation vector at the start), the I-frame of `physics`.
 """
 
-import sys
 from dataclasses import dataclass
-from pathlib import Path
+from functools import cached_property
 
-import h5py
 import lal
 import lalsimulation as ls
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "gw250114"))
-import eob_dynamics as ed  # noqa: E402  (observer frame, QNMs, PN backward evolution)
+from .base import EOBRun
 
-POSTERIOR_FILE = (
-    Path(__file__).parent.parent
-    / "IGWN-GWTC2p1-v2-GW190521_030229_PEDataRelease_mixed_nocosmo.h5"
-)
-POSTERIOR_LABEL = "C01:SEOBNRv4PHM"
-
-# settings of the LALInference run (config_file in the release)
+# default settings: those of the GW190521 (GWTC-2.1) LALInference run
 WAVEFORM_MINIMUM_FREQUENCY = 5.0  # fmin-template
 SAMPLING_RATE = 512.0
-KM_PER_MSUN = ed.KM_PER_MSUN
 
 N_DYNAMICS_VARIABLES = 26
 SEOB_FLAGS = {
@@ -51,15 +40,6 @@ SEOB_FLAGS = {
 MODES = [(2, 2), (2, 1), (3, 3), (4, 4), (5, 5)]  # default v4PHM mode content
 
 
-def load_posterior():
-    with h5py.File(POSTERIOR_FILE, "r") as f:
-        return f[POSTERIOR_LABEL]["posterior_samples"][()]
-
-
-def sample_as_dict(posterior, index):
-    return {name: float(posterior[name][index]) for name in posterior.dtype.names}
-
-
 def _sph_harm_list(series):
     modes = {}
     while series is not None:
@@ -70,8 +50,8 @@ def _sph_harm_list(series):
 
 @dataclass
 class Model:
-    """What `export_scene.py` needs, with the names of the pyseobnr model attributes
-    where they exist. Times in units of the total detector-frame mass M."""
+    """The output of SimIMRSpinPrecEOBWaveformAll, with the names of the pyseobnr model
+    attributes where they exist. Times in units of the total detector-frame mass M."""
 
     M: float  # total detector-frame mass [M_sun]
     m_1: float  # mass fractions
@@ -146,27 +126,9 @@ def polarizations(model, iota, phase):
                 for (ell, m), h in model.hI.items()) / model.distance_in_M
 
 
-PHASES_FILE = Path(__file__).parent / "products" / "phase_reconstruction.npz"
-
-
-def reconstructed_phases():
-    """Phases drawn by `reconstruct_phase.py` (the release's are not usable, see there)."""
-    if not PHASES_FILE.exists():
-        raise FileNotFoundError("run reconstruct_phase.py first")
-    d = np.load(PHASES_FILE)
-    return dict(zip(d["indices"].tolist(), d["phase_drawn"]))
-
-
-def sample_with_phase(posterior, index):
-    """A posterior sample with its coalescence phase replaced by the reconstructed one."""
-    s = sample_as_dict(posterior, index)
-    s["phase_release"] = s["phase"]
-    s["phase"] = float(reconstructed_phases()[index])
-    return s
-
-
 def inertial_dynamics(model, t_geom=None):
-    """Orbit, spins and angular momenta in the I-frame (L0 frame of f_min), in units of M."""
+    """Orbit, spins and angular momenta in the I-frame (L0 frame of f_min), in units of M.
+    "phi" is the angle swept by n along the given times (see `SEOBNRv4PHM.orbital_phase`)."""
     dyn = model.dynamics
     t_dyn = dyn[:, 0]
     if t_geom is None:
@@ -194,44 +156,52 @@ def inertial_dynamics(model, t_geom=None):
     )
 
 
-def orbital_phase(model, t_geom):
-    """Orbital phase [rad] at arbitrary times, from the angle swept by n on a fine grid."""
-    t_fine = np.linspace(model.dynamics[0, 0], model.dynamics[-1, 0], 200000)
-    d = inertial_dynamics(model, t_fine)
-    return np.interp(t_geom, t_fine, d["phi"])
+class SEOBNRv4PHM(EOBRun):
+    """LALSimulation run. The remnant spin is along v4PHM's final J; the ringdown is fitted
+    on the (2,2) mode in the final-J frame. Spins are given at f_min (v4PHM ignores f_ref);
+    the observer is at (iota, pi/2 - phase) in the I-frame."""
 
+    approximant = "SEOBNRv4PHM"
 
-def J_hat_at_past_infinity(model, f_low=1e-3):
-    """J direction at t -> -inf, evolving the sample's spins at f_min backwards with
-    pyseobnr's PN precession equations (the v4PHM dynamics start at f_min)."""
-    from pyseobnr.eob.dynamics.pn_evolution_opt import (
-        build_splines_PN,
-        compute_quasiprecessing_PNdynamics_opt,
-    )
+    def __init__(self, sample, f_min=WAVEFORM_MINIMUM_FREQUENCY, sampling_rate=SAMPLING_RATE):
+        self.model = m = run_model(sample, f_min, 1 / sampling_rate)
+        self.M, self.m_1, self.m_2, self.M_sec = m.M, m.m_1, m.m_2, m.M_sec
+        self.final_mass, self.final_spin = m.final_mass, m.final_spin
+        self.t_attach, self.t_peak = m.t_attach, m.t_peak
+        self.t_start, self.t_eval_end = m.dynamics[0, 0], m.dynamics[-1, 0]
+        self.omega_ref, self.chi1_ref, self.chi2_ref = m.dynamics[0, 22], m.chi1_start, m.chi2_start
+        self.inclination, self.phi_ref = sample["iota"], sample["phase"]
 
-    omega_start = model.dynamics[0, 22]
-    omega_low = np.pi * f_low * model.M_sec
-    # spins in the frame where L_N(f_min) = z: that is the I-frame
-    t, y = compute_quasiprecessing_PNdynamics_opt(
-        omega_start, omega_low, model.m_1, model.m_2, model.chi1_start, model.chi2_start
-    )
-    keep = y[:, -1] <= omega_start * (1 + 1e-12)
-    y = y[keep]
-    splines = build_splines_PN(t[keep], y, model.m_1, model.m_2, omega_low)
-    pn = splines["everything"](y[:, -1])
-    J = pn[:, 13:16] + model.m_1**2 * pn[:, 4:7] + model.m_2**2 * pn[:, 7:10]
-    J_hat = J / np.linalg.norm(J, axis=1)[:, None]
-    return J_hat[0], y[:, -1] / (np.pi * model.M_sec), J_hat
+    @cached_property
+    def _phase_track(self):
+        t_fine = np.linspace(self.model.dynamics[0, 0], self.model.dynamics[-1, 0], 200000)
+        return t_fine, inertial_dynamics(self.model, t_fine)["phi"]
 
+    def orbital_phase(self, t_geom):
+        """Orbital phase [rad] at arbitrary times, from the angle swept by n on a fine grid."""
+        return np.interp(t_geom, *self._phase_track)
 
-def fit_ringdown(model, fit_length=50.0):
-    """220 + 221 fit of the (2,2) mode in the final-J frame from t_attach (as in GW250114)."""
-    t = model.t_modes
-    h = model.hJ[(2, 2)]
-    sel = (t >= model.t_attach) & (t <= model.t_attach + fit_length)
-    omegas = np.array([ed.kerr_qnm_frequency(*lmn, model.final_spin, model.final_mass)
-                       for lmn in ed.RINGDOWN_MODES])
-    basis = np.exp(-1j * np.outer(t[sel] - model.t_attach, omegas))
-    amplitudes, *_ = np.linalg.lstsq(basis, h[sel], rcond=None)
-    residual = np.linalg.norm(basis @ amplitudes - h[sel]) / np.linalg.norm(h[sel])
-    return dict(omegas=omegas, amplitudes=amplitudes, residual=residual, n_points=int(sel.sum()))
+    def inertial_dynamics(self, t_geom=None):
+        d = inertial_dynamics(self.model, t_geom)
+        d["phi"] = self.orbital_phase(d["t"])
+        return d
+
+    @property
+    def omega_attach(self):
+        return float(self.model.dynamics[-1, 22])
+
+    def t_geometric(self, t_sec):
+        return self.model.t_geometric(t_sec)
+
+    def t_seconds(self, t_geom):
+        return self.model.t_seconds(t_geom)
+
+    @property
+    def Jfhat_attach(self):
+        return self.model.Jfhat_attach
+
+    def J_reference(self):
+        return inertial_dynamics(self.model, self.model.dynamics[:1, 0])["J"][0]
+
+    def ringdown_mode(self):
+        return self.model.t_modes, self.model.hJ[(2, 2)]

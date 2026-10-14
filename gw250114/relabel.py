@@ -7,7 +7,7 @@ is invariant; the m_1 >= m_2 convention picks one representative. Here instead
 
 For each sample, u(t) is the direction of BH 1 from the centre of mass (n = x_1 - x_2
 normalized) in the sky frame, on the common detector-time axis of the renders
-(`export_scene`). Relabeling flips u -> -u. With
+(`eobviz/export.py`). Relabeling flips u -> -u. With
     C_ij = sum_t w(t) u_i(t) . u_j(t),
 the signs s_i maximize sum_ij s_i s_j C_ij = sum_t w |sum_i s_i u_i|^2
 (Z2 synchronization): spectral initialization (leading eigenvector of C),
@@ -26,13 +26,19 @@ import argparse
 import json
 from multiprocessing import Pool
 
+import sys
+from pathlib import Path
+
 import bilby
 import numpy as np
 
-import eob_dynamics as ed
-from export_scene import IFO, TIME_WINDOW, axial_mean_angle
-from ppd import OUTDIR, REFERENCE_TIME
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eobviz.events import get_event  # noqa: E402
+from eobviz.export import axial_mean_angle  # noqa: E402
+from eobviz.models.seobnrv5 import SEOBNRv5PHM  # noqa: E402
 
+EVENT = get_event("GW250114")
+IFO, TIME_WINDOW, REFERENCE_TIME, OUTDIR = EVENT.ifo, EVENT.time_window, EVENT.reference_time, EVENT.products
 CACHE = OUTDIR / "relabel_cache"
 SAMPLE_RATE = 4096  # [Hz] of the cached u(t)
 ANALYSIS_WINDOW = (0.10, 0.25)  # detector time - REFERENCE_TIME [s]; merger at ~0.217
@@ -50,21 +56,20 @@ def time_grid():
 def compute_u(sample):
     """u(t) on `time_grid()` in the sky frame (NaN after the attachment),
     and J(t -> -inf) in the sky frame."""
-    model, gen = ed.run_model(sample)
-    params = gen.parameters
-    rot = ed.rotation_I_to_sky(params["inclination"], params["phi_ref"], sample["psi"])
+    run = SEOBNRv5PHM(sample, with_modes=False)
+    rot = run.rotation_I_to_sky(sample["psi"])
 
     ifo = bilby.gw.detector.get_empty_interferometer(IFO)
     delay = ifo.time_delay_from_geocenter(sample["ra"], sample["dec"], sample["geocent_time"])
     t_wave = time_grid() + REFERENCE_TIME - sample["geocent_time"] - delay
-    t_geom = ed.seconds_to_geometric(model)(t_wave)
-    if t_geom[0] < model.dynamics[0, 0]:
+    t_geom = run.t_geometric(t_wave)
+    if t_geom[0] < run.t_start:
         raise ValueError("time window starts before the dynamics")
 
-    ta = model.t_attach
-    u = ed.inertial_dynamics(model, np.minimum(t_geom, ta))["n"] @ rot.T
+    ta = run.t_attach
+    u = run.inertial_dynamics(np.minimum(t_geom, ta))["n"] @ rot.T
     u[t_geom > ta] = np.nan
-    J_inf, _, _ = ed.J_hat_at_past_infinity(model)
+    J_inf, _, _ = run.J_hat_at_past_infinity()
     return u, rot @ J_inf
 
 
@@ -72,7 +77,7 @@ def _cache_one(index):
     path = CACHE / f"sample{index}.npz"
     if path.exists():
         return
-    sample = ed.sample_as_dict(ed.load_posterior(), index)
+    sample = EVENT.sample(EVENT.load_posterior(), index)
     try:
         u, J_hat_inf = compute_u(sample)
     except Exception as e:  # keep going, report at the end
@@ -100,7 +105,7 @@ def load_cached():
 
 
 def fix_psi(u, J):
-    """psi -> psi + pi where needed, with the convention of `export_scene.export_set`."""
+    """psi -> psi + pi where needed, with the convention of `eobviz.export.export_set`."""
     axis_angle = axial_mean_angle(J[:, :2])
     axis = np.array([np.cos(axis_angle), np.sin(axis_angle)])
     if np.count_nonzero(J[:, :2] @ axis < 0) > len(J) / 2:
@@ -187,7 +192,7 @@ def phase_plot(u, s, t, times, path, unit="s"):
 
 
 def analyze():
-    posterior = ed.load_posterior()
+    posterior = EVENT.load_posterior()
     indices, u, J = load_cached()
     u, psi_flip = fix_psi(u, J)
     t = time_grid()
@@ -230,7 +235,7 @@ def main():
     args = parser.parse_args()
 
     if not args.analyze_only:
-        n_post = len(ed.load_posterior())
+        n_post = len(EVENT.load_posterior())
         rng = np.random.default_rng(args.seed)
         cloud = json.loads((OUTDIR / "cloud200.json").read_text())["labels"]
         indices = {int(label.removeprefix("sample")) for label in cloud}

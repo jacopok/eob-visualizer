@@ -31,18 +31,21 @@ whitened L1 strain with a time cursor. The signal is played back 100 times slowe
 real time, over the detector-time window $[-0.29, 0.37]$\,s around
 $t_0 = 1420878141.0$ (merger at $\approx t_0 + 0.217$\,s), giving 1981 frames.
 
-The pipeline, run from \code{gw250114/}, is:
+The pipeline is the \code{eobviz} package at the root of the repository; besides
+\code{gw250114/validate\_dynamics.py}, the consistency checks on the dynamics
+(Sec.~\ref{sec:checks}), its steps are commands \code{python -m eobviz <step> GW250114}:
 \begin{enumerate}
-  \item \code{validate\_dynamics.py}: consistency checks on the dynamics (Sec.~\ref{sec:checks});
-  \item \code{ppd.py}: whitened posterior-predictive band for the panel (Sec.~\ref{sec:panel});
-  \item \code{export\_scene.py --n-samples 200}: per-frame scene data for each sample
+  \item \code{ppd}: whitened posterior-predictive band for the panel (Sec.~\ref{sec:panel});
+  \item \code{export --n-samples 200}: per-frame scene data for each sample
         (Secs.~\ref{sec:dynamics}--\ref{sec:sky});
-  \item \code{camera.py}: the camera path (Sec.~\ref{sec:camera});
-  \item \code{blender\_scene.py}: builds the scene and renders the 3D frames (Sec.~\ref{sec:render});
-  \item \code{panel.py}: renders the panel frames and stacks everything into the video.
+  \item \code{camera}: the camera path (Sec.~\ref{sec:camera});
+  \item \code{render}: builds the scene in Blender (\code{blender\_scene.py}) and renders the
+        3D frames (Sec.~\ref{sec:render});
+  \item \code{panel}: renders the panel frames and stacks everything into the video.
 \end{enumerate}
-\code{camera.py}, \code{blender\_scene.py} and \code{panel.py} don't depend on the event: they
-read everything from the products directory. The same code also renders GW190521.
+Only the export depends on the waveform model, through a common interface (one class per
+model: SEOBNRv5PHM, SEOBNRv4PHM, TEOBResumS-Dali), and the event's settings and data are
+in one class per event. The same code also renders GW190521 and GW150914.
 
 \section{Samples}
 
@@ -229,17 +232,17 @@ cursor (in video time). It then stacks the panel under the 3D frames with ffmpeg
 \section*{Reproducing}
 
 \begin{verbatim}
-uv sync --python 3.10
+uv sync --python 3.10                    # in gw250114/
 .venv/bin/python validate_dynamics.py
-.venv/bin/python ppd.py --ifo L1 --include-maxl
-.venv/bin/python export_scene.py --n-samples 200
-.venv/bin/python camera.py --name cloud200
-blender -b --factory-startup -P blender_scene.py -- \
-    --manifest products/cloud200.json --outdir renders/cloud200 \
-    --style solid_highlight
-.venv/bin/python panel.py --name cloud200
+cd ..
+python -m eobviz ppd GW250114
+python -m eobviz export GW250114 --n-samples 200
+python -m eobviz camera GW250114 --name cloud200
+python -m eobviz render GW250114 --name cloud200 --style solid_highlight
+python -m eobviz panel GW250114 --name cloud200
 \end{verbatim}
-\code{blender\_scene.py --frames a:b} (or a comma-separated list) re-renders a subset of the
+\code{python -m eobviz scene GW250114 --name cloud200} opens the scene in Blender to explore
+it interactively. \code{render ... --frames a:b} (or a comma-separated list) re-renders a subset of the
 frames. For example, the ringdown frames were re-rendered with \code{--frames 1520:} after
 adding the collars to the remnant spin arrows.
 

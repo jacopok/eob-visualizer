@@ -1,4 +1,4 @@
-"""Consistency checks of the SEOBNRv4PHM dynamics extracted in `eob_v4phm.py`.
+"""Consistency checks of the SEOBNRv4PHM dynamics extracted in `eobviz/models/seobnrv4.py`.
 
 1. SimIMRSpinPrecEOBWaveformAll with our flags reproduces ChooseTDWaveform (PE path).
 2. At the start of the dynamics n = x and L_N = z (LAL L0 frame of f_min); the
@@ -23,11 +23,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-import eob_v4phm as ev
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "gw250114"))
-import eob_dynamics as ed  # noqa: E402
-from validate_dynamics import multipole_strain, project  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eobviz import physics  # noqa: E402
+from eobviz.events import get_event  # noqa: E402
+from eobviz.models import seobnrv4 as ev  # noqa: E402
+from eobviz.multipole import multipole_strain, project  # noqa: E402
 
 OUTDIR = Path(__file__).parent / "validation"
 OUTDIR.mkdir(exist_ok=True)
@@ -47,7 +47,8 @@ def check_choose_td(sample, model):
 
 
 def check_orbit_vs_waveform(sample, label):
-    model = ev.run_model(sample)
+    run = ev.SEOBNRv4PHM(sample)
+    model = run.model
     start = ev.inertial_dynamics(model, model.dynamics[:1, 0])
     print(f"[{label}] start: n = {np.round(start['n'][0], 6)}, L_N = {np.round(start['LN_hat'][0], 4)}, "
           f"f22 = {model.dynamics[0, 22] / (np.pi * model.M_sec):.3f} Hz")
@@ -61,7 +62,7 @@ def check_orbit_vs_waveform(sample, label):
     hp_model, hc_model = h_model.real, -h_model.imag
 
     R_M = sample["luminosity_distance"] * 1e6 * lal.PC_SI / (model.M * lal.MRSUN_SI)
-    N, P, Q = ed.observer_direction_I(sample["iota"], sample["phase"])
+    N, P, Q = physics.observer_direction_I(sample["iota"], sample["phase"])
     candidates = {
         "P=e_phi, Q=-e_theta (adopted)": (P, Q, +1),
         "adopted basis, bodies swapped": (P, Q, -1),
@@ -94,25 +95,27 @@ def check_orbit_vs_waveform(sample, label):
     axs[1].set_xlabel("time from peak [s]")
     fig.savefig(OUTDIR / f"orbit_vs_waveform_{label}.png", dpi=120)
     plt.close(fig)
-    return model
+    return run
 
 
-def check_angular_momentum(model):
+def check_angular_momentum(run):
+    model = run.model
     d = ev.inertial_dynamics(model)
     J_hat = d["J"] / np.linalg.norm(d["J"], axis=1)[:, None]
     Jf = model.Jfhat_attach
     print(f"[J] angle J(t_attach) vs J_final: {np.degrees(np.arccos(np.clip(J_hat[-1] @ Jf, -1, 1))):.2f} deg; "
           f"|J(t_attach)| = {np.linalg.norm(d['J'][-1]):.4f}, |J_final| = {np.linalg.norm(model.J_final):.4f} M^2")
-    J_inf, f22, J_pn = ev.J_hat_at_past_infinity(model)
+    J_inf, f22, J_pn = run.J_hat_at_past_infinity()
     print(f"[J] PN J_hat(f_min) vs dynamics J_hat(start): "
           f"{np.degrees(np.arccos(np.clip(J_pn[-1] @ J_hat[0], -1, 1))):.2f} deg; "
           f"J(-inf) vs J(f_min): {np.degrees(np.arccos(np.clip(J_inf @ J_hat[0], -1, 1))):.2f} deg")
 
 
-def check_ringdown(model, label):
+def check_ringdown(run, label):
     from pyseobnr.eob.utils.utils_precession_opt import SEOBBuildJframeVectors
 
-    fit = ev.fit_ringdown(model)
+    model = run.model
+    fit = run.fit_ringdown()
     A220, A221 = fit["amplitudes"]
     print(f"[RD] M_f = {model.final_mass:.4f} M, chi_f = {model.final_spin:.4f}; fit with "
           f"{fit['n_points']} points: residual {fit['residual']:.3f}, |A221/A220| = {abs(A221 / A220):.2f}, "
@@ -150,13 +153,13 @@ def check_ringdown(model, label):
 
 
 if __name__ == "__main__":
-    posterior = ev.load_posterior()
-    i_maxl = int(np.argmax(posterior["log_likelihood"]))
-    sample = ev.sample_as_dict(posterior, i_maxl)
-    model = check_orbit_vs_waveform(sample, "GW190521_maxL")
-    check_choose_td(sample, model)
-    check_angular_momentum(model)
-    check_ringdown(model, "GW190521_maxL")
+    event = get_event("GW190521")
+    posterior = event.load_posterior()
+    sample = event.release_sample(posterior, event.max_likelihood_index(posterior))
+    run = check_orbit_vs_waveform(sample, "GW190521_maxL")
+    check_choose_td(sample, run.model)
+    check_angular_momentum(run)
+    check_ringdown(run, "GW190521_maxL")
 
     test = dict(sample)
     test.update(mass_1=150.0, mass_2=50.0, iota=1.2, phase=0.7,

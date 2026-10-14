@@ -9,16 +9,18 @@ PY=../gw250114/.venv/bin/python
 $PY validate_v4phm.py                    # consistency checks -> validation/
 # data/: GWOSC 4 kHz strain, 64 s around the event (gwpy TimeSeries.fetch_open_data)
 $PY reconstruct_phase.py                 # coalescence phases, see below -> products/phase_reconstruction.npz
-$PY ppd_gw190521.py                      # whitened L1 PPD (500 samples) -> products/
-$PY export_gw190521.py --n-samples 200   # scene data -> products/scenes/, products/cloud200.json
-cd ../gw250114
-.venv/bin/python camera.py --name cloud200 --products ../gw190521/products
-blender -b --factory-startup -P blender_scene.py -- \
-    --manifest ../gw190521/products/cloud200.json --outdir ../gw190521/renders/cloud200
-.venv/bin/python panel.py --name cloud200 --products ../gw190521/products   # -> ../gw190521/renders/cloud200.mp4
+cd ..                                    # the pipeline runs from the repository root
+python -m eobviz ppd GW190521            # whitened L1 PPD (500 samples) -> products/
+python -m eobviz export GW190521 --n-samples 200   # scene data -> products/scenes/, products/cloud200.json
+python -m eobviz camera GW190521 --name cloud200
+python -m eobviz render GW190521 --name cloud200
+python -m eobviz panel GW190521 --name cloud200    # -> renders/cloud200.mp4
+python -m eobviz scene GW190521 --name cloud200    # explore the scene in Blender
 ```
 
-## Dynamics (`eob_v4phm.py`)
+The event's settings, data and phase handling are in `eobviz/events/gw190521.py`.
+
+## Dynamics (`eobviz/models/seobnrv4.py`)
 
 - SEOBNRv4PHM from LALSimulation, called as in PE (ChooseTDWaveform, f_min = 5 Hz as the
   run's fmin-template, 512 Hz): v4PHM ignores f_ref, so the samples' Cartesian spins are

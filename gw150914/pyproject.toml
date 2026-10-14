@@ -1,0 +1,29 @@
+[project]
+name = "gw150914-blender"
+version = "0.1.0"
+description = "Blender visualization of GW150914 TEOBResumS-Dali (eccentric, precessing) posterior dynamics"
+requires-python = ">=3.10,<3.11"
+# as ../gw250114, plus TEOBResumS at the version of the paper (CQG 10.1088/1361-6382/adfe50:
+# bitbucket tag 2505.21612); the eobviz pipeline runs in this environment for GW150914
+dependencies = [
+    "teobresums",
+    "pyseobnr==0.3.5",
+    "lalsuite==7.26",
+    "bilby==2.6.0",
+    "bilby_pipe==1.6.0",
+    "gwpy==3.0.11",
+    "numpy==1.24.4",
+    "scipy==1.13.1",
+    "h5py",
+    "matplotlib",
+    "numpy-quaternion",
+    "qnm",
+    "surfinBH",
+]
+
+[tool.uv]
+package = false
+build-constraint-dependencies = ["setuptools>=78,<80", "scipy==1.13.1", "numpy==1.24.4"]
+
+[tool.uv.sources]
+teobresums = { git = "https://bitbucket.org/teobresums/teobresums", tag = "2505.21612", subdirectory = "Python" }

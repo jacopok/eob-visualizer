@@ -1,4 +1,4 @@
-"""Consistency checks of the dynamics extracted in `eob_dynamics.py`.
+"""Consistency checks of the SEOBNRv5PHM dynamics extracted in `eobviz/models/seobnrv5.py`.
 
 1. The co-precessing z axis R(t) z coincides with L_N(t) from the PN splines.
 2. The point-particle orbit, fed to the Cartesian multipole formula
@@ -19,57 +19,28 @@
 5. Running pyseobnr with `with_modes=True` leaves the dynamics untouched.
 """
 
+import sys
+from pathlib import Path
+
 import bilby
 import lal
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-import eob_dynamics as ed
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eobviz import physics  # noqa: E402
+from eobviz.events import get_event  # noqa: E402
+from eobviz.models import seobnrv5 as ed  # noqa: E402
+from eobviz.multipole import multipole_strain, project  # noqa: E402
 
-OUTDIR = ed.Path(__file__).parent / "validation"
+OUTDIR = Path(__file__).parent / "validation"
 OUTDIR.mkdir(exist_ok=True)
-
-eps = np.zeros((3, 3, 3))
-eps[0, 1, 2] = eps[1, 2, 0] = eps[2, 0, 1] = 1
-eps[0, 2, 1] = eps[2, 1, 0] = eps[1, 0, 2] = -1
-
-
-def multipole_strain(x1, x2, m1, m2, dt, N):
-    """r * h_ij (G=c=1) of two point masses, positions sampled uniformly with step dt."""
-
-    def d(a, n):
-        for _ in range(n):
-            a = np.gradient(a, dt, axis=0, edge_order=2)
-        return a
-
-    I2 = m1 * np.einsum("ti,tj->tij", x1, x1) + m2 * np.einsum("ti,tj->tij", x2, x2)
-    I3 = m1 * np.einsum("ti,tj,tk->tijk", x1, x1, x1) + m2 * np.einsum(
-        "ti,tj,tk->tijk", x2, x2, x2
-    )
-    v1, v2 = d(x1, 1), d(x2, 1)
-    # current quadrupole S_ij = STF sum m x_i (x cross v)_j
-    S = m1 * np.einsum("ti,tj->tij", x1, np.cross(x1, v1)) + m2 * np.einsum(
-        "ti,tj->tij", x2, np.cross(x2, v2)
-    )
-    S = (S + S.transpose(0, 2, 1)) / 2
-    S -= np.einsum("tkk->t", S)[:, None, None] * np.eye(3) / 3
-
-    h = 2 * d(I2, 2)
-    h += 2 / 3 * np.einsum("tijk,k->tij", d(I3, 3), N)
-    A = np.einsum("pqi,tjp,q->tij", eps, d(S, 2), N)
-    h += 8 / 3 * (A + A.transpose(0, 2, 1)) / 2
-    return h
-
-
-def project(h, P, Q):
-    hp = 0.5 * (np.einsum("tij,i,j->t", h, P, P) - np.einsum("tij,i,j->t", h, Q, Q))
-    hc = 0.5 * (np.einsum("tij,i,j->t", h, P, Q) + np.einsum("tij,i,j->t", h, Q, P))
-    return hp, hc
 
 
 def check_orbit_vs_waveform(sample, label):
-    model, gen = ed.run_model(sample)
+    run = ed.SEOBNRv5PHM(sample, with_modes=False)
+    model, gen = run.model, run.generator
     params = gen.parameters
     M = model.M
     to_seconds = ed.geometric_to_seconds(model)
@@ -98,7 +69,7 @@ def check_orbit_vs_waveform(sample, label):
     hp_model, hc_model = h_model.real, -h_model.imag
 
     R_M = params["distance"] * 1e6 * lal.PC_SI / (M * lal.MRSUN_SI)
-    N, P, Q = ed.observer_direction_I(params["inclination"], params["phi_ref"])
+    N, P, Q = physics.observer_direction_I(params["inclination"], params["phi_ref"])
     e_theta = -Q
     candidates = {
         "P=e_phi, Q=-e_theta (adopted)": (P, Q, +1),
@@ -134,7 +105,7 @@ def check_orbit_vs_waveform(sample, label):
     fig.suptitle(f"{label}: multipole formula on EOB orbit vs model")
     fig.savefig(OUTDIR / f"orbit_vs_waveform_{label}.png", dpi=120)
     plt.close(fig)
-    return model, gen
+    return run
 
 
 def check_time_alignment(sample, model, gen, ifo_name="H1"):
@@ -202,8 +173,8 @@ def check_time_alignment(sample, model, gen, ifo_name="H1"):
     plt.close(fig)
 
 
-def check_J_infinity(model):
-    J_inf, f22, J_hat = ed.J_hat_at_past_infinity(model)
+def check_J_infinity(run):
+    J_inf, f22, J_hat = run.J_hat_at_past_infinity()
     iref = np.argmin(np.abs(f22 - ed.REFERENCE_FREQUENCY))
     J_ref = J_hat[iref]
     print(f"[J] J_hat(f_ref={f22[iref]:.2f} Hz) = {J_ref}")
@@ -216,7 +187,8 @@ def check_J_infinity(model):
 
 def check_ringdown(sample, label):
     model_pe, _ = ed.run_model(sample)
-    model, _ = ed.run_model(sample, with_modes=True)
+    run = ed.SEOBNRv5PHM(sample, with_modes=True)
+    model = run.model
     print(f"[RD] max |dynamics difference| PE run vs with_modes: "
           f"{np.abs(model.dynamics - model_pe.dynamics).max():.1e}, "
           f"t_attach difference {model.t_attach - model_pe.t_attach:.1e}")
@@ -225,14 +197,14 @@ def check_ringdown(sample, label):
     t = to_geom(model.t)
     h = model.wavefom_modesJ["2,2"]
     ta = model.t_attach
-    fit = ed.fit_ringdown(model)
+    fit = run.fit_ringdown()
     A220, A221 = fit["amplitudes"]
     print(f"[RD] M_f = {model.final_mass:.4f} M, chi_f = {model.final_spin:.4f}; "
           f"M omega_220 = {fit['omegas'][0]:.4f}, M omega_221 = {fit['omegas'][1]:.4f}")
     print(f"[RD] 220+221 fit from t_attach: residual {fit['residual']:.3f}, "
           f"|A221/A220| = {abs(A221 / A220):.2f}, arg(A221/A220) = {np.angle(A221 / A220):.2f}")
     for length in (30, 80):
-        f2 = ed.fit_ringdown(model, fit_length=length)
+        f2 = run.fit_ringdown(fit_length=length)
         print(f"[RD]   fit length {length} M: residual {f2['residual']:.3f}, "
               f"|A221/A220| = {abs(f2['amplitudes'][1] / f2['amplitudes'][0]):.2f}")
     # 220 only, for comparison
@@ -256,7 +228,7 @@ def check_ringdown(sample, label):
     fig, axs = plt.subplots(1, 2, figsize=(11, 3.5))
     w = (t > ta - 150) & (t < ta + 60)
     tr = np.linspace(ta, ta + 60, 300)
-    hf = ed.ringdown_h22(fit, tr, ta)
+    hf = physics.ringdown_h22(fit, tr, ta)
     axs[0].semilogy(t[w] - ta, np.abs(h[w]), label=r"$|h_{22}^J|$ SEOBNRv5PHM")
     axs[0].semilogy(tr - ta, np.abs(hf), "--", label="220 + 221 fit")
     axs[0].semilogy(tr - ta, np.abs(fit["amplitudes"][0] * np.exp(-1j * fit["omegas"][0] * (tr - ta))),
@@ -273,7 +245,7 @@ def check_ringdown(sample, label):
 
 
 def check_kick(sample, label):
-    """Recoil from NRSur7dq4Remnant two ways: (a) as in export_scene, from the EOB spins and
+    """Recoil from NRSur7dq4Remnant two ways: (a) as in eobviz/export.py, from the EOB spins and
     orbit at -100 M from the peak; (b) surfinBH alone, from the PE spins at f_ref in the
     LAL frame of f_ref (= our I-frame), evolved with its own PN + NRSur7dq4 spin dynamics.
     Both are in the I-frame; they differ by the spin evolution (EOB vs PN/NRSur)."""
@@ -281,8 +253,8 @@ def check_kick(sample, label):
 
     model, gen = ed.run_model(sample)
     p = gen.parameters
-    d = ed.inertial_dynamics(model, np.atleast_1d(model.t_attach + ed.KICK_EPOCH))
-    v_a, err = ed.nrsur_kick(model.m_1, model.m_2, d["chi1"][0], d["chi2"][0], d["n"][0], d["LN_hat"][0])
+    d = ed.inertial_dynamics(model, np.atleast_1d(model.t_attach + physics.KICK_EPOCH))
+    v_a, err = physics.nrsur_kick(model.m_1, model.m_2, d["chi1"][0], d["chi2"][0], d["n"][0], d["LN_hat"][0])
     fit = surfinBH.LoadFits("NRSur7dq4Remnant")
     omega0 = np.pi * p["f_ref"] * model.M * lal.MTSUN_SI
     chi1 = np.array([p["spin1x"], p["spin1y"], p["spin1z"]])
@@ -296,14 +268,14 @@ def check_kick(sample, label):
 
 
 if __name__ == "__main__":
-    posterior = ed.load_posterior()
-    i_maxl = int(np.argmax(posterior["log_likelihood"]))
-    sample = ed.sample_as_dict(posterior, i_maxl)
+    event = get_event("GW250114")
+    posterior = event.load_posterior()
+    sample = event.sample(posterior, event.max_likelihood_index(posterior))
 
-    model, gen = check_orbit_vs_waveform(sample, "GW250114_maxL")
-    check_time_alignment(sample, model, gen, "H1")
-    check_time_alignment(sample, model, gen, "L1")
-    check_J_infinity(model)
+    run = check_orbit_vs_waveform(sample, "GW250114_maxL")
+    check_time_alignment(sample, run.model, run.generator, "H1")
+    check_time_alignment(sample, run.model, run.generator, "L1")
+    check_J_infinity(run)
     check_ringdown(sample, "GW250114_maxL")
     check_kick(sample, "GW250114_maxL")
 
@@ -316,4 +288,4 @@ if __name__ == "__main__":
     check_orbit_vs_waveform(test, "q3_precessing")
     check_kick(test, "q3_precessing")
     for i in np.random.default_rng(2).choice(len(posterior), 5, replace=False):
-        check_kick(ed.sample_as_dict(posterior, i), f"sample{i}")
+        check_kick(event.sample(posterior, i), f"sample{i}")

@@ -18,3 +18,4 @@ writeup/*.aux
 *.fls
 *.fdb_latexmk
 *.out
+*.synctex.gz

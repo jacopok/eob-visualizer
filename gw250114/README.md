@@ -8,21 +8,21 @@ merging and ringing down, viewed from Earth.
 ```bash
 uv sync --python 3.10            # see "Environment" below for the pyseobnr rebuild
 .venv/bin/python validate_dynamics.py                  # consistency checks -> validation/
-.venv/bin/python ppd.py --ifo L1 --include-maxl        # whitened PPD (500 samples) -> products/
-.venv/bin/python export_scene.py --n-samples 200       # per-frame scene data -> products/scenes/, products/cloud200.json
+cd ..                                                  # the pipeline runs from the repository root
+python -m eobviz ppd GW250114                          # whitened L1 PPD (500 samples + max L) -> products/
+python -m eobviz export GW250114 --n-samples 200       # per-frame scene data -> products/scenes/, products/cloud200.json
                                                        # (no argument: max-likelihood sample only -> products/sample<i>.json)
-.venv/bin/python camera.py --name cloud200             # camera path -> products/cloud200_camera.npz
-blender -b --factory-startup -P blender_scene.py -- \
-    --manifest products/cloud200.json --outdir renders/cloud200 --style solid_highlight --save-blend
-.venv/bin/python panel.py --name cloud200              # panel frames + final video renders/cloud200.mp4
+python -m eobviz camera GW250114 --name cloud200       # camera path -> products/cloud200_camera.npz
+python -m eobviz render GW250114 --name cloud200 --style solid_highlight --save-blend   # -> renders/cloud200/
+python -m eobviz panel GW250114 --name cloud200        # panel frames + final video renders/cloud200.mp4
+python -m eobviz scene GW250114 --name cloud200        # explore the scene in Blender, back and forth in time
 ```
 
-`camera.py`, `blender_scene.py` and `panel.py` are event-agnostic (they read everything from
-the manifest and the scene files; `--products DIR` points them to another event's products),
-and are also used for GW190521 (`../gw190521/README.md`).
-
-```
-```
+The code is in `../eobviz` (see the repository README); `python -m eobviz` switches to this
+directory's `.venv` by itself. The SEOBNRv5PHM call is in `eobviz/models/seobnrv5.py`, the
+event's settings and data in `eobviz/events/gw250114.py`. The same pipeline serves GW190521
+(`../gw190521/README.md`) and GW150914 (TEOBResumS-Dali, eccentric and precessing:
+`../gw150914/README.md`).
 
 ## What is shown, and how it is computed
 
@@ -43,7 +43,7 @@ and are also used for GW190521 (`../gw190521/README.md`).
   attachment the phase keeps running at the attachment orbital frequency.
 - **Time window**: L1 time −0.29 to 0.37 s (merger at ≈0.217), i.e. from 0.5 s before merger,
   played back 100 times slower; the panel scrolls with a fixed 0.19 s window.
-- **Camera** (`camera.py`): starts on the line of sight from Earth, far away (nearly
+- **Camera** (`eobviz/camera.py`): starts on the line of sight from Earth, far away (nearly
   orthographic), framing the orbits and slowly zooming in as they shrink; then flies to a
   close-up that follows one cluster of bodies (those of the majority θ_JN family near the
   same body of a reference sample) from above its orbital plane, co-rotating with it; then
@@ -95,7 +95,7 @@ and are also used for GW190521 (`../gw190521/README.md`).
    swapping the bodies is disfavoured in an unequal-mass test (q=3).
 3. bilby's frequency-domain L1/H1 response matches the time-domain polarizations placed at
    `geocent_time + delay` with zero lag.
-4. `ppd.py --approximant NRSur7dq4` reproduces the paper's reconstruction.
+4. `python -m eobviz ppd GW250114 --approximant NRSur7dq4` reproduces the paper's reconstruction.
 5. Ringdown (max-L and random samples): a 220 + 221 fit of h22 in the final-J frame from
    t_attach has a relative residual of 0.18–0.21 (220 alone: 0.54), almost all within the
    first few M, where the model's amplitude has a flat peak that no QNM sum reproduces;

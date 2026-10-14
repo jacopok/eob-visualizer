@@ -1,12 +1,20 @@
-"""Build and render the 3D scene of a set of posterior samples exported by `export_scene.py`.
+"""Build and render the 3D scene of a set of posterior samples exported by `export.py`.
 
-Usage:
-    blender -b --factory-startup -P blender_scene.py -- \
-        --manifest products/<name>.json --outdir renders/<name> [--frames 0:100] [--save-blend]
-(after `python camera.py --name <name>`)
+Usage (or through `python -m eobviz render|scene EVENT --name <name>`):
+    blender -b --factory-startup -P eobviz/blender_scene.py -- \
+        --event GW250114 --name <name> [--frames 0:100] [--save-blend]
+    blender -P eobviz/blender_scene.py -- --event GW250114 --name <name> --interactive
+(after `python -m eobviz camera EVENT --name <name>`). `--manifest products/<name>.json`
+can replace `--event` and `--name`.
+
+--interactive opens the scene in Blender's GUI instead of rendering: scrub the timeline
+or play to move back and forth in time (every quantity is keyframed on every frame), and
+look through the animated camera or fly around freely. Timeline markers show the time
+in the event's detector, the median merger and the camera's shot changes; a text in the
+corner of the view (not rendered) shows the time of the current frame.
 
 All the physics is in the exported arrays; this script only draws them.
-World frame = sky frame of `eob_dynamics.py`: X west, Y north, Z towards Earth.
+World frame = sky frame of `physics.py`: X west, Y north, Z towards Earth.
 The camera follows the path computed by `camera.py`; on the line of sight (+Z) it is far
 away (nearly orthographic). When it leaves the line of sight, a camera icon on +Z,
 connected to the centre of mass, marks the direction to Earth.
@@ -69,11 +77,13 @@ STYLES = {
 def parse_args():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     p = argparse.ArgumentParser()
-    p.add_argument("--manifest", required=True)
-    p.add_argument("--outdir", required=True)
+    p.add_argument("--event", default=None, help="e.g. GW250114, with --name")
+    p.add_argument("--name", default=None, help="scene set, e.g. cloud200")
+    p.add_argument("--manifest", default=None, help="products/<name>.json, instead of --event and --name")
+    p.add_argument("--outdir", default=None, help="frames and .blend (default: <event>/renders/<name>)")
     p.add_argument("--camera", default=None, help="camera path (default: products/<name>_camera.npz)")
     p.add_argument("--frames", default=None,
-                   help="start:stop (python slice of frame indices) or a comma-separated list")
+                   help="start:stop (python slice of frame indices) or a comma-separated list of frames")
     p.add_argument("--resolution", default="1920x810")
     p.add_argument("--samples", type=int, default=16)
     p.add_argument("--body-alpha", type=float, default=None,
@@ -84,7 +94,27 @@ def parse_args():
     p.add_argument("--style", default="glow", choices=sorted(STYLES))
     p.add_argument("--save-blend", action="store_true")
     p.add_argument("--no-render", action="store_true")
-    return p.parse_args(argv)
+    p.add_argument("--interactive", action="store_true",
+                   help="set up the GUI for exploring the scene instead of rendering")
+    args = p.parse_args(argv)
+    if args.manifest is None:
+        if not (args.event and args.name):
+            p.error("give --event and --name, or --manifest")
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from eobviz.events import event_directory
+
+        args.manifest = str(event_directory(args.event) / "products" / f"{args.name}.json")
+    manifest = Path(args.manifest)
+    if args.outdir is None:
+        args.outdir = str(manifest.parent.parent / "renders" / manifest.stem)
+    return args
+
+
+def load_scene(path):
+    """All the arrays of a scene file, read once (an open NpzFile re-reads an array from
+    disk at every access)."""
+    with np.load(path) as f:
+        return {k: f[k] for k in f.files}
 
 
 def bu(x_km):
@@ -563,7 +593,7 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
     if glow is None:
         glow = min(1.0, 4 / n) ** 0.35
     # length scale of the event: a round multiple of the GW250114 sizes
-    r_f = np.median([float(np.load(scenes / f"{label}.npz")["radius_f"]) for label in labels[:20]])
+    r_f = np.median([float(load_scene(scenes / f"{label}.npz")["radius_f"]) for label in labels[:20]])
     scale = min((1.0, 2.0, 2.5, 5.0), key=lambda x: abs(np.log(x * REFERENCE_REMNANT_KM / r_f)))
     style = {k: v * scale if k.endswith("_km") or k.endswith("_km_per_chi") else v
              for k, v in style.items()}
@@ -586,13 +616,14 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
     sphere = unit_sphere_mesh("unit_sphere")
     tubes = [tube_node_group(style["trail_radius_km"], mats[f"trail{k}"]) for k in (1, 2)]
 
+    infos = [json.load(open(scenes / f"{label}.json")) for label in labels]
     best = None
     if style["highlight"] and n > 1:
-        logl = [json.load(open(scenes / f"{label}.json"))["sample"]["log_likelihood"] for label in labels]
-        best = labels[int(np.argmax(logl))]
+        best = labels[int(np.argmax([info["sample"]["log_likelihood"] for info in infos]))]
     for label in labels:
-        d = np.load(scenes / f"{label}.npz")
+        d = load_scene(scenes / f"{label}.npz")
         n_frames, fps = len(d["t_det_rel"]), int(d["fps"])
+        timeline = {k: d[k] for k in ("t_det_rel", "ifo", "reference_time")}
         if label != best:
             build_sample(d, mats, sphere, tubes, label, style)
 
@@ -600,9 +631,9 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
         hmats = sample_materials(style, 1.0, glow, prefix="maxL_", strong=True)
         htubes = [tube_node_group(style["highlight_trail_radius_km"], hmats[f"trail{k}"]) for k in (1, 2)]
         hstyle = dict(style, arrow_radius_km=style["highlight_arrow_radius_km"])
-        build_sample(np.load(scenes / f"{best}.npz"), hmats, sphere, htubes, f"maxL_{best}", hstyle)
+        build_sample(load_scene(scenes / f"{best}.npz"), hmats, sphere, htubes, f"maxL_{best}", hstyle)
 
-    track = np.load(camera_file)
+    track = load_scene(camera_file)
     assert len(track["width"]) == n_frames
     camera_quaternions = make_camera(track, scene)
     label = make_earth_marker(track, glow_material("earth", (1.0, 0.85, 0.5), 1.0))
@@ -612,13 +643,79 @@ def build(manifest_file, camera_file, body_alpha, glow, style):
     scene.frame_start = 0
     scene.frame_end = n_frames - 1
     scene.render.fps = fps
-    return scene
+    t_merge = float(np.median([info["t_attach_det_rel"] for info in infos]))
+    add_time_markers(scene, timeline, t_merge, track)
+    return scene, timeline, t_merge, track
+
+
+def add_time_markers(scene, timeline, t_merge, track):
+    """Timeline markers: detector time every 0.1 s, the median merger, and where the camera
+    leaves and comes back to the line of sight. The detector time and the time from the
+    merger are also keyframed as custom properties of the scene."""
+    t = timeline["t_det_rel"]
+    frame_of = lambda x: int(np.argmin(np.abs(t - x)))
+    for tick in np.arange(np.ceil(t[0] * 10), np.floor(t[-1] * 10) + 1) / 10:
+        scene.timeline_markers.new(f"{tick:+.1f} s", frame=frame_of(tick))
+    scene.timeline_markers.new("merger", frame=frame_of(t_merge))
+    off_axis = track["earth_marker"] > 0
+    for f in np.flatnonzero(np.diff(off_axis.astype(int))):
+        scene.timeline_markers.new("camera off axis" if off_axis[f + 1] else "camera on axis", frame=int(f + 1))
+    scene["t_det_rel"] = 0.0
+    scene["t_minus_merger"] = 0.0
+    animate(scene, '["t_det_rel"]', t)
+    animate(scene, '["t_minus_merger"]', t - t_merge)
+
+
+def make_clock(scene, timeline, t_merge, material):
+    """A text in the lower left corner of the camera view with the time of the current
+    frame, updated on frame change; not rendered."""
+    text = bpy.data.curves.new("clock", "FONT")
+    text.align_x, text.align_y = "LEFT", "BOTTOM"
+    clock = new_object("clock", text, material)
+    clock.hide_render = True
+    clock.parent = scene.camera
+    t = timeline["t_det_rel"]
+    ifo, ref = str(timeline["ifo"]), float(timeline["reference_time"])
+    aspect = scene.render.resolution_x / scene.render.resolution_y
+
+    def update(scene, depsgraph=None):
+        f = min(max(scene.frame_current, 0), len(t) - 1)
+        text.body = (f"{ifo} time - {ref:.1f} s: {t[f]:+.4f} s\n"
+                     f"from merger: {(t[f] - t_merge) * 1e3:+.1f} ms\nframe {scene.frame_current}")
+        cam = scene.camera.data
+        depth = 5 * cam.clip_start
+        half_width = depth * cam.sensor_width / 2 / cam.lens
+        clock.location = (-0.96 * half_width, -0.94 * half_width / aspect, -depth)
+        clock.scale = (0.035 * half_width,) * 3
+
+    update(scene)
+    bpy.app.handlers.frame_change_post.append(update)
+
+
+def setup_gui(scene, track):
+    """Look through the scene camera, with clipping that fits the scene and a rendered
+    view; play back dropping frames to keep real time."""
+    clip_end = float(bu(4 * track["distance"].max()))
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            space = area.spaces.active
+            space.clip_start, space.clip_end = 0.01, clip_end
+            space.shading.type = "RENDERED"
+            space.region_3d.view_perspective = "CAMERA"
+    try:
+        scene.sync_mode = "FRAME_DROP"
+    except (AttributeError, TypeError):
+        pass
+    scene.frame_set(scene.frame_start)
 
 
 def main():
     args = parse_args()
     camera = args.camera or str(Path(args.manifest).with_name(Path(args.manifest).stem + "_camera.npz"))
-    scene = build(args.manifest, camera, args.body_alpha, args.glow, STYLES[args.style])
+    scene, timeline, t_merge, track = build(args.manifest, camera, args.body_alpha, args.glow,
+                                            STYLES[args.style])
     w, h = map(int, args.resolution.split("x"))
     scene.render.resolution_x, scene.render.resolution_y = w, h
     scene.render.resolution_percentage = 100
@@ -632,10 +729,16 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     if args.save_blend:
         bpy.ops.wm.save_as_mainfile(filepath=str(outdir / "scene.blend"))
+    if args.interactive:
+        make_clock(scene, timeline, t_merge, glow_material("clock", (1.0, 0.85, 0.5), 1.0))
+        if not bpy.app.background:
+            # once the window is up
+            bpy.app.timers.register(lambda: setup_gui(scene, track), first_interval=0.1)
+        return
     if args.no_render:
         return
 
-    if args.frames and "," in args.frames:
+    if args.frames and ":" not in args.frames:
         for f in map(int, args.frames.split(",")):
             scene.frame_set(f)
             scene.render.filepath = str(outdir / f"3d_{f:04d}.png")

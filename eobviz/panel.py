@@ -1,13 +1,11 @@
 """Render the whitened-strain panel frames (PPD band, data, shown samples, time cursor)
 and stack them under the Blender frames into a video.
 
-Usage: python panel.py --name cloud40     (products/<name>.json from export_scene.py)
+Usage: python -m eobviz panel EVENT --name cloud200   (products/<name>.json from export.py)
 """
 
-import argparse
 import json
 import subprocess
-from pathlib import Path
 
 import matplotlib
 
@@ -15,30 +13,41 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ppd import OUTDIR
-
-RENDERS = Path(__file__).parent / "renders"
 WIDTH_PX, HEIGHT_PX, DPI = 1920, 270, 100
 WINDOW_BEFORE, WINDOW_AFTER = 13.0, 6.0  # scrolling window around the cursor [s of video]
 
 
-def render_panels(name, products=OUTDIR):
+def load_ppd(path, indices):
+    """The PPD arrays, and the whitened waveforms of the posterior samples `indices`.
+
+    Each access to an array of an open NpzFile reads it from disk again, and a row of
+    it keeps the whole array alive: indexing `waveforms` once per shown sample used to
+    hold one full copy (up to 130 MB) per sample, ~26 GB for 200 GW150914 samples.
+    """
+    with np.load(path) as f:
+        ppd = {k: f[k] for k in f.files if k != "waveforms"}
+        rows = []
+        for index in indices:
+            where = np.flatnonzero(ppd["sample_indices"] == index)
+            if len(where) == 0:
+                raise ValueError(f"whitened waveform of sample {index} not in the PPD file")
+            rows.append(where[-1])
+        shown = f["waveforms"][rows]
+    return ppd, shown
+
+
+def render_panels(event, name):
+    products = event.products
     manifest = json.load(open(products / f"{name}.json"))
     labels = manifest["labels"]
     scenes = products / "scenes"
-    scene = np.load(scenes / f"{labels[0]}.npz")
+    with np.load(scenes / f"{labels[0]}.npz") as f:
+        scene = {k: f[k] for k in ("t_det_rel", "slowdown", "ifo", "reference_time", "fps")}
     infos = [json.load(open(scenes / f"{label}.json")) for label in labels]
-    event = manifest.get("event", "GW250114")
-    approximant = manifest.get("approximant", "SEOBNRv5PHM")
-    ppd = np.load(products / manifest.get("ppd_file", f"ppd_SEOBNRv5PHM_{scene['ifo']}.npz"))
+    approximant = manifest.get("approximant", event.approximant)
+    ppd, shown = load_ppd(products / manifest.get("ppd_file", event.ppd_file().name), manifest["indices"])
     before = WINDOW_BEFORE / float(scene["slowdown"])
     after = WINDOW_AFTER / float(scene["slowdown"])
-    shown = []
-    for index in manifest["indices"]:
-        where = np.flatnonzero(ppd["sample_indices"] == index)
-        if len(where) == 0:
-            raise ValueError(f"whitened waveform of sample {index} not in the PPD file")
-        shown.append(ppd["waveforms"][where[-1]])
     n = len(shown)
 
     t_frames = scene["t_det_rel"]
@@ -64,7 +73,7 @@ def render_panels(name, products=OUTDIR):
     ax.tick_params(labelsize=8)
     ax.legend(loc="upper left", fontsize=7, frameon=False)
 
-    outdir = products.parent / "renders" / name
+    outdir = event.renders / name
     outdir.mkdir(parents=True, exist_ok=True)
     for f, tf in enumerate(t_frames):
         cursor.set_xdata([tf, tf])
@@ -74,33 +83,17 @@ def render_panels(name, products=OUTDIR):
     return outdir, int(scene["fps"])
 
 
-def compose_for(name, products, fps):
-    global RENDERS
-    RENDERS = products.parent / "renders"
-    return compose(RENDERS / name, fps, name)
-
-
-def compose(outdir, fps, label):
-    video = RENDERS / f"{label}.mp4"
+def compose(frames, fps, video):
+    """Stack the 3D frames (3d_####.png) over the panel frames (panel_####.png) of the
+    directory `frames` into `video`."""
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",
-            "-framerate", str(fps), "-i", str(outdir / "3d_%04d.png"),
-            "-framerate", str(fps), "-i", str(outdir / "panel_%04d.png"),
+            "-framerate", str(fps), "-i", str(frames / "3d_%04d.png"),
+            "-framerate", str(fps), "-i", str(frames / "panel_%04d.png"),
             "-filter_complex", "[0:v][1:v]vstack=inputs=2,format=yuv420p",
             "-c:v", "libx264", "-crf", "18", str(video),
         ],
         check=True,
     )
     return video
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True, help="manifest name, e.g. cloud40 or sample19987")
-    parser.add_argument("--products", type=Path, default=OUTDIR, help="event products directory")
-    parser.add_argument("--no-video", action="store_true")
-    args = parser.parse_args()
-    outdir, fps = render_panels(args.name, args.products)
-    if not args.no_video:
-        print(compose_for(args.name, args.products, fps))

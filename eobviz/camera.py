@@ -1,4 +1,4 @@
-"""Camera path for a set of exported samples (`export_scene.py`), read by `blender_scene.py`.
+"""Camera path for a set of exported samples (`export.py`), read by `blender_scene.py`.
 
 Shots, in detector time:
 1. from Earth (on the line of sight, far away, i.e. nearly orthographic), wide,
@@ -6,6 +6,9 @@ Shots, in detector time:
 2. a close-up that follows one cluster of bodies (the bodies of the majority theta_JN
    family that are near the same body of a reference sample), from above its orbital
    plane, co-rotating with it;
+   or (`--shot orbit`) a slow orbit: the camera descends from the line of sight to
+   ORBIT_ELEVATION_DEG above the grid plane, circles once around the grid normal (in the
+   sense of most orbits), framing the whole set, and climbs back;
 3. back to the line of sight, framing the merger and the ringdown.
 
 A shot is a target point, a viewing direction (target -> camera), the width of the view
@@ -15,17 +18,13 @@ the target linearly, the direction by slerp, width and distance logarithmically.
 The direction to Earth is +Z; `earth_marker` (0..1) says how far the camera is from it,
 used to show a marker on the line of sight when the camera is not on it.
 
-Usage: python camera.py --name cloud200
+Usage: python -m eobviz camera EVENT --name cloud200 [--shot orbit]
 """
 
-import argparse
 import json
-from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-
-from ppd import OUTDIR
 
 ASPECT = 1920 / 810  # 3D view above the 1920x270 panel
 FAR_KM = 40000.0  # camera distance on the line of sight (nearly orthographic)
@@ -36,6 +35,8 @@ WIDE_FACTOR = 1.1  # initial width relative to the orbit
 # shot schedule, in seconds of video before the (median) merger
 CLOSE_UP_IN = (39.7, 33.7)
 CLOSE_UP_OUT = (15.7, 8.7)
+ORBIT_ELEVATION_DEG = 30.0  # above the grid plane, on the observer's side
+ORBIT_DISTANCE = 2.0  # camera distance in units of the view width (perspective)
 
 
 def smoothstep(x, x0, x1):
@@ -59,9 +60,16 @@ def slerp(a, b, w):
     return normalize(out)
 
 
-def load(name, products=OUTDIR):
+def load_scene(path):
+    """All the arrays of a scene file, read once (an open NpzFile re-reads an array from
+    disk at every access)."""
+    with np.load(path) as f:
+        return {k: f[k] for k in f.files}
+
+
+def load(name, products):
     manifest = json.load(open(products / f"{name}.json"))
-    scenes = [np.load(products / "scenes" / f"{label}.npz") for label in manifest["labels"]]
+    scenes = [load_scene(products / "scenes" / f"{label}.npz") for label in manifest["labels"]]
     infos = [json.load(open(products / "scenes" / f"{label}.json")) for label in manifest["labels"]]
     return manifest, scenes, infos
 
@@ -108,7 +116,24 @@ def cluster_track(scenes, infos, fps=24):
     return centroid, L, spread, radius, len(members), int(ref)
 
 
-def camera_path(name, products=OUTDIR):
+def orbit_shot(t, t_start, t_end, J_grid, scenes, width):
+    """One turn around the grid normal at ORBIT_ELEVATION_DEG, starting (and ending) at
+    the azimuth of the line of sight, targeting the centre of mass."""
+    n = len(t)
+    a = normalize(np.asarray(J_grid, float))
+    z = np.array([0, 0, 1.0])
+    e1 = normalize(z - (z @ a) * a)
+    e2 = np.cross(a, e1)
+    sense = np.sign(np.sum([np.sign(d["LN_hat"][0] @ a) for d in scenes])) or 1.0
+    psi = sense * 2 * np.pi * np.clip((t - t_start) / (t_end - t_start), 0, 1)
+    el = np.radians(ORBIT_ELEVATION_DEG)
+    direction = (np.cos(el) * (np.cos(psi)[:, None] * e1 + np.sin(psi)[:, None] * e2)
+                 + np.sin(el) * a)
+    return dict(target=np.zeros((n, 3)), direction=direction, up=np.tile(a, (n, 1)),
+                width=width, distance=ORBIT_DISTANCE * width)
+
+
+def camera_path(name, products, shot="close-up"):
     manifest, scenes, infos = load(name, products)
     t = scenes[0]["t_det_rel"]
     n = len(t)
@@ -134,6 +159,8 @@ def camera_path(name, products=OUTDIR):
     # frame the cluster and the centre of mass; wider if the cluster is diffuse
     width = np.maximum(1.1 * rc, 2.5 * spread) + 2 * (radius + MARGIN_KM)
     close = dict(target=0.85 * c, direction=direction, up=L, width=width, distance=1.5 * width)
+    if shot == "orbit":
+        close = orbit_shot(t, close_up_in[0], close_up_out[1], manifest["J_hat_grid"], scenes, W_fit)
 
     w = smoothstep(t, *close_up_in) * (1 - smoothstep(t, *close_up_out))
     target = (1 - w[:, None]) * axis["target"] + w[:, None] * close["target"]
@@ -160,15 +187,9 @@ def camera_path(name, products=OUTDIR):
         cluster_centroid=c,
     )
     np.savez(products / f"{name}_camera.npz", **out)
-    print(f"{name}: {n} frames, merger at {t_merge:.4f} s; close-up on a cluster of the "
-          f"{n_family}-sample family (reference sample {manifest['labels'][ref]}); "
+    what = ("orbit around the centre of mass" if shot == "orbit" else
+            f"close-up on a cluster of the {n_family}-sample family (reference sample {manifest['labels'][ref]})")
+    print(f"{name}: {n} frames, merger at {t_merge:.4f} s; {what}; "
           f"max off-axis angle {off_axis.max():.0f} deg")
     return out
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--products", type=Path, default=OUTDIR, help="event products directory")
-    args = parser.parse_args()
-    camera_path(args.name, args.products)

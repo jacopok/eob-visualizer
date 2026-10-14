@@ -27,7 +27,7 @@ All steps resume: downloaded slim files and cached u(t) are skipped.
 |----------|-------------------------|-----------------------|--------|
 | GWTC-4.1 | SEOBNRv5PHM (~88 events) | bilby + gwsignal      | supported: same waveform call as GW250114, settings read from each run's config |
 | GWTC-5.0 | SEOBNRv5PHM (~104)       | RIFT                  | needs RIFT's waveform call and phase/time/ψ conventions reproduced and validated |
-| GWTC-3, GWTC-2.1 | SEOBNRv4PHM (~90) | RIFT or LALInference | needs the v4PHM dynamics generalized from `gw190521/eob_v4phm.py`, and the same validation |
+| GWTC-3, GWTC-2.1 | SEOBNRv4PHM (~90) | RIFT or LALInference | needs the v4PHM dynamics generalized from `eobviz/models/seobnrv4.py`, and the same validation |
 
 Only GWTC-4.1 can run now. A new pipeline goes in `Run.compute_u`, and `catalog.supported`
 gets switched on for it, but only after its waveform reproduces the PE one, as checked in

@@ -12,12 +12,12 @@ Differences from the GW250114 analysis, so that one setting serves all events:
 - waveform settings read from each run's config.
 
 Supported: SEOBNRv5PHM runs of bilby with gwsignal (GWTC-4.1), whose waveform call is
-the one in `eob_dynamics` (validated for GW250114 in `validate_dynamics.py`).
+the one in `eobviz/models/seobnrv5.py` (validated for GW250114 in `validate_dynamics.py`).
 Not supported yet, each needs its waveform call and conventions (phase, time,
 polarization angle) reproduced and validated, as done for GW190521 in
 `gw190521/validate_v4phm.py`:
 - RIFT SEOBNRv5PHM (GWTC-5.0): Cartesian spins at f_ref = f_min, l_max = 4;
-- SEOBNRv4PHM (GWTC-2.1, GWTC-3), RIFT or LALInference: `gw190521/eob_v4phm.py`
+- SEOBNRv4PHM (GWTC-2.1, GWTC-3), RIFT or LALInference: `eobviz/models/seobnrv4.py`
   (LALInference) is the starting point.
 
 Outputs: data/u/<event>/<grid>/sample<i>.npz (cache), products/<event>/<window>/
@@ -43,16 +43,18 @@ import numpy as np
 
 import catalog
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "gw250114"))
-import eob_dynamics as ed  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "gw250114"))
+import lal  # noqa: E402
 import relabel  # noqa: E402
+from eobviz.models.seobnrv5 import SEOBNRv5PHM  # noqa: E402
 
 PRODUCTS = Path(__file__).parent / "products"
 U_CACHE = catalog.DATA / "u"
 WINDOW_M = (-350.0, 0.0)  # tau / M of the analysis window
 GRID_M = (-400.0, 50.0)  # tau / M of the cached u(t)
 STEP_M = 0.5
-SECONDS_PER_MSUN = ed.lal.MTSUN_SI
+SECONDS_PER_MSUN = lal.MTSUN_SI
 
 
 class Run:
@@ -71,17 +73,16 @@ class Run:
 
     def compute_u(self, sample):
         """u(tau) in the sky frame (NaN after the attachment), and J(t -> -inf)."""
-        model, gen = ed.run_model(sample, settings=self.settings)
-        params = gen.parameters
-        rot = ed.rotation_I_to_sky(params["inclination"], params["phi_ref"], sample["psi"])
+        run = SEOBNRv5PHM(sample, settings=self.settings, with_modes=False)
+        rot = run.rotation_I_to_sky(sample["psi"])
         t_wave = self.t_c + self.tau_M * self.M_sec - sample["geocent_time"]
-        t_geom = ed.seconds_to_geometric(model)(t_wave)
-        if t_geom[0] < model.dynamics[0, 0]:
+        t_geom = run.t_geometric(t_wave)
+        if t_geom[0] < run.t_start:
             raise ValueError("time grid starts before the dynamics")
-        ta = model.t_attach
-        u = ed.inertial_dynamics(model, np.minimum(t_geom, ta))["n"] @ rot.T
+        ta = run.t_attach
+        u = run.inertial_dynamics(np.minimum(t_geom, ta))["n"] @ rot.T
         u[t_geom > ta] = np.nan
-        J_inf, _, _ = ed.J_hat_at_past_infinity(model)
+        J_inf, _, _ = run.J_hat_at_past_infinity()
         return u, rot @ J_inf
 
 
